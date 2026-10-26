@@ -24,6 +24,10 @@ window.__ModuleLoader__.load({
     function post(path, body) {
       return fetch('/dsh-world/console/' + path, { method: 'POST', cache: 'no-store', headers: { 'content-type': 'application/json', 'x-dsh-world': '1' }, body: JSON.stringify(body || {}) }).then(settle)
     }
+    /** QQ 那几扇门在自己的前缀下（/dsh-world/qq/*），不和 console 混在一起。 */
+    function qqPost(path, body) {
+      return fetch('/dsh-world/qq/' + path, { method: 'POST', cache: 'no-store', headers: { 'content-type': 'application/json', 'x-dsh-world': '1' }, body: JSON.stringify(body || {}) }).then(settle)
+    }
     /** 快照，或 null 表示控制台不在（404、不是 JSON 的页面、没有 life 字段的回复）。 */
     function loadSnapshot() {
       return api('snapshot').then(function (s) {
@@ -271,6 +275,35 @@ window.__ModuleLoader__.load({
         msg ? h('div', { key: 'x', className: msg.indexOf('失败') >= 0 || msg.indexOf('请填') >= 0 ? 'dw-bad' : 'dw-muted' }, msg) : null,
       ] : h('div', { className: 'dw-muted' }, '—'))
     }
+    /** QQ：外面的 qq-bridge 进程，在这里看状态、拉起、停掉；入口绑到哪个会话也在这里看。 */
+    function Qq(props) {
+      var qq = props.qq || {}
+      var busyState = useState(false), busy = busyState[0], setBusy = busyState[1]
+      var msgState = useState(''), msg = msgState[0], setMsg = msgState[1]
+      var rows = list(qq.sessions)
+      function run(path) {
+        setBusy(true); setMsg('')
+        qqPost(path).then(function () {
+          setMsg('')
+          if (props.onSaved) props.onSaved()
+        }, function (e) { setMsg('失败：' + ((e && e.message) || e)) }).then(function () { setBusy(false) })
+      }
+      var faults = list(qq.faults)
+      return h(Card, { title: 'QQ', delay: 240 }, [
+        h('div', { key: 's' }, h('span', { className: qq.running ? 'dw-ok' : 'dw-muted' }, qq.running ? '● 桥在跑' : '● 没在跑'),
+          h('span', { className: 'dw-muted' }, ' · 端口 ' + qq.port + (qq.mode ? ' · ' + qq.mode : ''))),
+        qq.running ? h('div', { key: 'c', className: 'dw-muted' },
+          'DSH ' + (qq.dsh ? '已连上' : '没连上') + ' · QQ ' + (qq.connected ? (qq.accountOnline ? '在线' : '已连接、号没上线') : '没连上') + (qq.lastPacketAgoMs === null || qq.lastPacketAgoMs === undefined ? '' : ' · 上次收包 ' + Math.round(qq.lastPacketAgoMs / 1000) + ' 秒前')) : null,
+        h('div', { key: 'e', className: 'dw-trail' }, rows.length ? rows.map(function (r, i) {
+          return h('span', { key: i }, r.key + ' → ' + String(r.sessionId || '').replace(/^session-/, '').slice(0, 8))
+        }) : h('span', { className: 'dw-muted' }, '还没有入口绑到会话')),
+        h('div', { key: 'b', className: 'dw-setting' },
+          h('button', { className: 'dw-btn', disabled: busy, onClick: function () { run(qq.running ? 'stop' : 'start') } }, busy ? '……' : qq.running ? '停桥' : '拉起桥'),
+          h('button', { className: 'dw-btn', disabled: busy, onClick: function () { if (props.onSaved) props.onSaved() } }, '刷新')),
+        msg ? h('div', { key: 'x', className: msg.indexOf('失败') >= 0 ? 'dw-bad' : 'dw-muted' }, msg) : null,
+        faults.length ? faults.map(function (f, i) { return h('div', { key: 'f' + i, className: 'dw-bad' }, '● ' + f) }) : null,
+      ])
+    }
     function Overview(props) {
       var snap = props.snap, zone = snap.timeZone, life = snap.life, alarm = life && life.alarm, mem = snap.memory
       var health = list(snap.health), wakes = life ? list(life.recentWakes) : []
@@ -296,7 +329,8 @@ window.__ModuleLoader__.load({
         h('div', { className: 'dw-grid' },
           h(Card, { title: '健康', delay: 120 }, health.length ? health.map(function (f, i) { return h('div', { key: i, className: 'dw-bad' }, '● ' + f) }) : h('div', { className: 'dw-ok' }, '● 一切正常')),
           h(Memory, { mem: mem, onSaved: props.refresh }),
-          h(Budget, { budget: snap.budget, onSaved: props.refresh })))
+          h(Budget, { budget: snap.budget, onSaved: props.refresh }),
+          snap.qq ? h(Qq, { qq: snap.qq, onSaved: props.refresh }) : null))
     }
     function Records(props) {
       var snap = props.snap, zone = snap.timeZone, life = snap.life, compactions = list(snap.compactions)

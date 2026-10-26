@@ -6,7 +6,17 @@ import type { ArchiveStore } from './store.ts';
 import type { WorldConfig } from './types.ts';
 
 const pageSize = 128;
+/** The host no longer stores this session at all — nothing left to replay; keep what was already archived. */
 const isNotFound = (error: unknown) => error instanceof Error && error.name === 'SessionPersistenceNotFoundError';
+/**
+ * A session log the host itself cannot read (a compaction cut off mid-write, a half-flushed turn). It is not
+ * our bug and it never fixes itself, so retrying adds nothing — one broken conversation must not cost her the
+ * whole world: flushed and thrown, it fails the plugin's load and every session loses its memory block.
+ */
+export function isCorruptSessionLog(error: unknown): boolean {
+  const text = error instanceof Error ? `${error.name} ${error.message}` : String(error ?? '');
+  return /stored log is corrupt|SessionFormatError|does not match an open turn/i.test(text);
+}
 export function belongsToWorld(session: Pick<Session, 'header'>, config: WorldConfig): boolean {
   const header = session.header;
   return header.agentPreset === config.agentPreset && header.origin !== 'subagent' && (header.delegationDepth ?? 0) === 0;
@@ -65,7 +75,11 @@ export function createSourceArchive(ctx: Context, config: WorldConfig, store: Ar
       failures.delete(sessionId);
     });
     jobs.set(sessionId, job);
-    tail = job.catch(error => { failures.set(sessionId, error); ctx.logger.error(error); }).finally(() => { jobs.delete(sessionId); });
+    tail = job.catch(error => {
+      // Skips and a warning instead of a stored failure — see `isCorruptSessionLog`.
+      if (isCorruptSessionLog(error)) { dirty.delete(sessionId); ctx.logger.warn(`dsh-world: 会话 ${sessionId} 的日志读不动，先跳过（这段对话不归档）`); return; }
+      failures.set(sessionId, error); ctx.logger.error(error);
+    }).finally(() => { jobs.delete(sessionId); });
     return job;
   }
   return {

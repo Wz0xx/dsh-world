@@ -49,7 +49,17 @@ DSH 设置里的「世界控制台」：
 
 dsh-world 开放了一个本地的「桥」：桌宠之类的程序可以把你说的话送进她的家，也可以接收她的回复和主动找你的话。协议见文末。
 
-之后还会接上微信、QQ 和 B 站。
+之后还会接上微信和 B 站。
+
+### QQ
+
+装了 [qq-bridge](https://github.com/Derpyu520/qq-bridge) 并配上 `qqBridgeDir` 之后，控制台里会多一张 QQ 卡片：桥在不在跑、DSH 有没有连上、QQ 号在不在线、哪几个入口（群或私聊）绑到了哪个会话，一眼看到；拉起桥、停桥也在那儿按。没配 `qqBridgeDir` 的时候这一块整个不出现，行为跟以前一样。
+
+插件每次启动都会把 DSH 当前的地址写回桥的 `config.json`（`dsh.baseUrl`）。原因是 DSH 每次重启都换端口，而桥没有别的地方知道新端口——地址旧了不会报错，只会静静连不上，看起来和桥本身挂掉一模一样。
+
+桥还是那个独立进程，代码不在这里：插件只负责探活、拉起、停掉、绑定和报告，不复制它的逻辑。
+
+<img src="assets/qq-card.png" width="700" alt="世界控制台里的 QQ 卡：桥在跑、DSH 已连上、QQ 在线，下面是绑定的入口和拉起／停桥">
 
 ## 安装
 
@@ -95,6 +105,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\enable-tool-free-c
     bridge: false                # 打开本地的桥
     outlets: []                  # 接收她的话的本地程序，见文末
     allowedHosts: []             # 通过反向代理从局域网访问控制台时，放行的域名或 IP
+    qqBridgeDir: ''             # qq-bridge 所在的目录；留空就是不接 QQ
+    qqBridgePort: 3100          # 桥的控制台端口
+    qqBridgeNode: ''            # 用哪个 node 拉起桥，默认用当前进程那个
+    qqBridgeAutoStart: false    # 世界开始时顺手拉起桥；默认关，只在控制台里手动拉
 ```
 
 **改她的措辞**：世界提示词可以直接在控制台里改。闹钟响时、提前停下时、每日回顾时她收到的话，在世界目录里放一份 `alarm.md` 就能按段覆盖，段落名和可用的占位符见 `templates/alarm.md`。插件写给她的话一律用第一人称「我」，读起来是她自己的念头。

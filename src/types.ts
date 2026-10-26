@@ -33,6 +33,14 @@ export interface WorldConfig {
   toast?: boolean;
   /** Names besides this machine the console and the bridge answer to (a LAN address or domain behind a reverse proxy). */
   allowedHosts?: string[];
+  /** The qq-bridge checkout, so QQ can reach her home too; empty leaves the module off. */
+  qqBridgeDir?: string;
+  /** The bridge's console port; 3100 by default. */
+  qqBridgePort?: number;
+  /** Node used to start the bridge; the current process by default. */
+  qqBridgeNode?: string;
+  /** Start the bridge together with her world; off by default, so it stays a manual start from the console. */
+  qqBridgeAutoStart?: boolean;
 }
 export interface ConversationRecord {
   schemaVersion: 1;

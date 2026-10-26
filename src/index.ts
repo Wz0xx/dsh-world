@@ -15,6 +15,8 @@ import { createLifeRuntime, type LifeRuntime } from './life/runtime.ts';
 import type { LifeOptions } from './life/types.ts';
 import { createOutlet } from './outlets.ts';
 import { readPersona, writePersona } from './persona.ts';
+import { createQqBridge, type QqBridge } from './qq/bridge.ts';
+import { qqRoute } from './qq/route.ts';
 import { createWorldRuntime } from './runtime.ts';
 import { createArchiveStore } from './store.ts';
 import type { WorldConfig } from './types.ts';
@@ -26,7 +28,7 @@ export type { WorldConfig, ConversationRecord, ConversationTurn, ArchiveCursor }
 export const name = 'dsh-world';
 export const inject = ['agents', 'sessions', 'sessionPersistence', 'llm'];
 /** What `apply` receives: the schema below fills these defaults. */
-export type Config = WorldConfig & Required<Pick<WorldConfig, 'life' | 'fallbackWakeTime' | 'outlets' | 'bridge' | 'toast' | 'allowedHosts'>>;
+export type Config = WorldConfig & Required<Pick<WorldConfig, 'life' | 'fallbackWakeTime' | 'outlets' | 'bridge' | 'toast' | 'allowedHosts' | 'qqBridgeDir' | 'qqBridgePort' | 'qqBridgeAutoStart'>>;
 // One companion per profile is the usual case, so it works as installed: the standard preset, a world named
 // default and the system time zone, with the life line on (it needs the desktop host's services and stays off without them).
 const systemTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
@@ -43,8 +45,12 @@ export const Config = z.object({
   toast: z.boolean().default(true),
   // The console and the bridge answer only this machine by name, plus these (a LAN address or domain behind a proxy).
   allowedHosts: z.array(z.string()).default([]),
+  // QQ: her home is reachable from outside DSH through a separate `qq-bridge` process. Empty qqBridgeDir leaves
+  // this whole module off; the bridge is started by hand from the console unless qqBridgeAutoStart says otherwise.
+  qqBridgeDir: z.string().default(''), qqBridgePort: z.number().default(3100), qqBridgeNode: z.string(),
+  qqBridgeAutoStart: z.boolean().default(false),
 });
-interface WebServer { register(route: ReturnType<typeof consoleRoute> | ReturnType<typeof bridgeRoute>): () => void }
+interface WebServer { register(route: ReturnType<typeof consoleRoute> | ReturnType<typeof bridgeRoute> | ReturnType<typeof qqRoute>): () => void }
 
 /**
  * Her world runs only after her partner presses start in the world console, and stops when they press stop:
@@ -85,6 +91,17 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   ctx.inject(['sessionController', 'permissionPresets', 'webServer'], async lifeCtx => {
     const webServer = (lifeCtx as unknown as { webServer: WebServer }).webServer;
     const host = hostLife(lifeCtx);
+    // QQ: one more door into her home, managed here rather than by a launcher script. The endpoint is aligned
+    // on every start whether or not the bridge runs — DSH picks a new port each restart, and a stale baseUrl
+    // looks exactly like a dead bridge (a dead event stream, no error, for hours).
+    const qq = config.qqBridgeDir
+      ? createQqBridge({ dir: config.qqBridgeDir, port: config.qqBridgePort, nodePath: config.qqBridgeNode || process.execPath, origin: () => host.origin(), logger: lifeCtx.logger })
+      : undefined;
+    if (qq) {
+      const service = qq;
+      lifeCtx.effect(() => webServer.register(qqRoute(service, config.allowedHosts)), 'dsh-world qq route');
+      void (config.qqBridgeAutoStart ? service.ensureRunning() : service.syncEndpoint()).catch(error => lifeCtx.logger.warn(error));
+    }
     const lifeStore = (() => {
       if (!config.life) return undefined;
       try { return createLifeStore(worldDir, config.timeZone); }
@@ -117,7 +134,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // The host matches exact routes before the longest prefix, so this path never reaches the console.
     if (config.bridge) lifeCtx.effect(() => webServer.register(bridgeRoute(() => bridge, config.allowedHosts)), 'dsh-world bridge route');
 
-    const sources = consoleSources({ ctx: lifeCtx, config, archive: store, names, ...(lifeStore ? { lifeStore } : {}), life: () => life, diaryDir: options.diaryDir, running: power.running, dailyBudget: power.dailyBudget, memoryTurns: power.memoryTurns, faults: () => [...faults.list(), ...(memory?.faults() ?? []), ...(bridge?.faults() ?? [])] });
+    const sources = consoleSources({ ctx: lifeCtx, config, archive: store, names, ...(lifeStore ? { lifeStore } : {}), life: () => life, diaryDir: options.diaryDir, running: power.running, dailyBudget: power.dailyBudget, memoryTurns: power.memoryTurns, ...(qq ? { qq: () => qq.status() } : {}), faults: () => [...faults.list(), ...(memory?.faults() ?? []), ...(bridge?.faults() ?? []), ...(qq?.faults() ?? [])] });
     const actions: ConsoleActions = {
       async start() {
         if (power.running()) return;
