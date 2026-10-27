@@ -65,6 +65,11 @@ export interface QqNativeConfig {
   bindHomeSession: 'owner' | 'all' | 'none' | '';
   /** 阳台：让这台机器上别的程序能跟家里说话的那条线。`port` 为 0 就整块不开。 */
   bridge: { port: number; token: string; title: string; contextMessages: number };
+  /**
+   * 只停嘴不停耳：这个时间之前收到的话照旧进上下文，但一句都不回。空字符串 = 没静默。
+   * 跟 autoReply 的区别是它会自己醒 —— autoReply 关了要人再拨回来，这个到点就恢复。
+   */
+  mutedUntil: string;
 }
 
 export interface QqNativeStatus {
@@ -89,6 +94,12 @@ export interface QqNativeStatus {
   bindHomeSession: 'owner' | 'all' | 'none' | '';
   /** 群里接话的规矩。 */
   groupTrigger: 'mention' | 'all';
+  /** 现在是不是在静默里（mutedUntil 还没到点）。 */
+  muted: boolean;
+  /** 静默到什么时候；没静默就是 null。 */
+  mutedUntil: string | null;
+  /** 还没发出去、在队列里等重试的条数。 */
+  outbox: number;
 }
 
 /**
@@ -184,15 +195,61 @@ export function createQqNativeModule(deps: {
     sent: 0, failed: 0, blocked: 0, lastEventAt: null, lastBlockedAt: null, lastError: null,
   };
 
+  /**
+   * 发不出去的回复先排这儿。
+   *
+   * 重载插件会停 `QQ module` 两秒，正好落在中间的回复从 `sendGroup` 里直接抛出来、然后被 catch 掉
+   * —— 那句话就没了。日志里是 `QQ 回复 … 失败: QQ module is stopped`，2026-10-27 17:52 撞过两次。
+   * 现在抛出来的话进这个队，模块回来以后每 3 秒试一次，最多留 5 分钟。
+   */
+  const outbox: { kind: 'group' | 'private'; target: string; parts: string | QqPart[]; tries: number; firstAt: number }[] = [];
+  const OUTBOX_TTL_MS = 5 * 60_000;
+  const OUTBOX_MAX_TRIES = 40;
+  let outboxTimer: ReturnType<typeof setInterval> | undefined;
+
+  async function flushOutbox(): Promise<void> {
+    if (!outbox.length || stopped) return;
+    const now = Date.now();
+    for (let i = outbox.length - 1; i >= 0; i -= 1) {
+      const item = outbox[i];
+      if (now - item.firstAt > OUTBOX_TTL_MS || item.tries > OUTBOX_MAX_TRIES) {
+        outbox.splice(i, 1);
+        stats.failed += 1;
+        stats.lastError = '排在队里太久，放弃了';
+        continue;
+      }
+      try {
+        if (item.kind === 'group') rememberSent((await client?.sendGroup(item.target, item.parts))?.messageId);
+        else rememberSent((await client?.sendPrivate(item.target, item.parts))?.messageId);
+        outbox.splice(i, 1);
+        stats.sent += 1;
+      } catch {
+        item.tries += 1;
+      }
+    }
+  }
+
+  /** 发一条；发不出去就排队，不往上游抛。 */
+  async function sendOrQueue(kind: 'group' | 'private', target: string, parts: string | QqPart[]): Promise<void> {
+    try {
+      if (kind === 'group') rememberSent((await client?.sendGroup(target, parts))?.messageId);
+      else rememberSent((await client?.sendPrivate(target, parts))?.messageId);
+    } catch (error) {
+      outbox.push({ kind, target, parts, tries: 1, firstAt: Date.now() });
+      stats.lastError = error instanceof Error ? error.message : String(error);
+      deps.logger.warn(`QQ 这条没发出去，先排队（${outbox.length} 条待发）: ${stats.lastError}`);
+    }
+  }
+
   // 拨过的开关写在 stateFile 里，重载不丢；配置里那个是出厂默认。
-  let overrides: { autoReply?: boolean; bridge?: { port?: number } } = {};
+  let overrides: { autoReply?: boolean; bridge?: { port?: number }; mutedUntil?: string | null } = {};
   let overridesRead = false;
   function readOverrides(): void {
     if (overridesRead) return;
     overridesRead = true;
     const file = deps.stateFile;
     if (!file) return;
-    try { overrides = JSON.parse(readFileSync(file, 'utf8')) as { autoReply?: boolean; bridge?: { port?: number } }; } catch { overrides = {}; }
+    try { overrides = JSON.parse(readFileSync(file, 'utf8')) as { autoReply?: boolean; bridge?: { port?: number }; mutedUntil?: string | null }; } catch { overrides = {}; }
   }
   function writeOverrides(): void {
     const file = deps.stateFile;
@@ -207,6 +264,7 @@ export function createQqNativeModule(deps: {
     return {
       ...base,
       ...(overrides.autoReply === undefined ? {} : { autoReply: overrides.autoReply }),
+      ...(overrides.mutedUntil === undefined ? {} : { mutedUntil: overrides.mutedUntil ?? '' }),
       bridge,
     };
   };
@@ -242,10 +300,19 @@ export function createQqNativeModule(deps: {
     if (config.groupTrigger === 'all') return true;
     for (const segment of message.segments ?? []) {
       const data = segment?.data ?? {};
-      if (segment?.type === 'at' && (data.qq === 'all' || String(data.qq ?? '') === message.selfId)) return true;
+      // @全体 不算叫她 —— 那是群公告，不是喊她。
+      if (segment?.type === 'at' && String(data.qq ?? '') === message.selfId) return true;
       if (segment?.type === 'reply' && data.id != null && sentIds.has(String(data.id))) return true;
     }
     return config.groupKeywords.some(word => word !== '' && message.text.includes(word));
+  }
+
+  /** 现在是不是在静默里。mutedUntil 空着或已过期都算醒着。 */
+  function isMuted(config: QqNativeConfig): boolean {
+    const until = (config.mutedUntil ?? '').trim();
+    if (!until) return false;
+    const at = Date.parse(until);
+    return Number.isFinite(at) && Date.now() < at;
   }
 
   function allowed(identity: SpeakerIdentity): boolean {
@@ -311,6 +378,11 @@ export function createQqNativeModule(deps: {
       return;
     }
 
+    // 静默：话照收、上下文照记，就是不出声。到点自己醒，不用谁来拨。
+    if (isMuted(config)) {
+      pushContext(key, { id: messageId || `${Date.now()}`, occurredAt: new Date().toISOString(), text, identity }, config.contextMessages);
+      return;
+    }
     if (!config.autoReply || stopped) {
       pushContext(key, { id: messageId || `${Date.now()}`, occurredAt: new Date().toISOString(), text, identity }, config.contextMessages);
       return;
@@ -391,8 +463,7 @@ export function createQqNativeModule(deps: {
         for (let i = 0; i < chunks.length; i += 1) {
           if (i > 0) await new Promise((r) => setTimeout(r, 600));
           const chunk = chunks[i];
-          if (isGroup) rememberSent((await client?.sendGroup(conversationId, chunk))?.messageId);
-          else rememberSent((await client?.sendPrivate(conversationId, chunk))?.messageId);
+          await sendOrQueue(isGroup ? 'group' : 'private', conversationId, chunk);
         }
       }
       for (const sticker of stickers) {
@@ -452,7 +523,7 @@ export function createQqNativeModule(deps: {
         const chunks = said.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
         for (let i = 0; i < chunks.length; i += 1) {
           if (i > 0) await new Promise((resolve) => setTimeout(resolve, 600));
-          await client?.sendPrivate?.(owner, chunks[i]);
+          await sendOrQueue('private', owner, chunks[i]);
         }
       })().catch((error: unknown) => deps.logger.warn('时间轮的话没能推给主人：', error));
     });
@@ -495,6 +566,9 @@ export function createQqNativeModule(deps: {
         lastError: stats.lastError,
         sent: stats.sent,
         failed: stats.failed,
+        muted: isMuted(config),
+        mutedUntil: (config.mutedUntil ?? '').trim() || null,
+        outbox: outbox.length,
       };
     },
     /** 面板上改阳台的端口：当场关掉重开那条线（0 就是关）。 */
@@ -503,6 +577,17 @@ export function createQqNativeModule(deps: {
       nativeBridge?.stop();
       nativeBridge = undefined;
       startBridge(settings());
+      return this.status();
+    },
+    /**
+     * 只停嘴不停耳：给一个时间点，到点前只收不回；给 null 或空字符串就是立刻恢复。
+     *
+     * 跟 setAutoReply 分开是有意的 —— autoReply 是「这条线还用不用」，这个只是「先别说话」。
+     */
+    setMuted(until: string | null) {
+      readOverrides();
+      overrides.mutedUntil = until && until.trim() ? until.trim() : null;
+      writeOverrides();
       return this.status();
     },
     /** 面板上那个「会不会自己回」的开关。 */
@@ -516,6 +601,7 @@ export function createQqNativeModule(deps: {
       if (stopped) return;
       const config = settings();
       if (!config.enabled) return;
+      if (!outboxTimer) outboxTimer = setInterval(() => { void flushOutbox(); }, 3000);
       const bridge = (deps.transport ?? createBridge)({
         wsUrl: config.wsUrl,
         ...(config.accessToken ? { accessToken: config.accessToken } : {}),

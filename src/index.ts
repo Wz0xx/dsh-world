@@ -64,6 +64,9 @@ export const Config = z.object({
     // （她自己会在话里写「这句不接」，但那句话本身也发到群里了）。默认只接被叫到的。
     groupTrigger: z.union([z.const('mention').description('只接被叫到的（被 @ / 被引用她的话 / 命中关键词）'), z.const('all').description('每句都接')]).default('mention'),
     groupKeywords: z.array(z.string()).default([]),
+    // 只停嘴不停耳：这个时间之前话说照收、上下文照记，但一句都不回，到点自己醒。
+    // 跟 autoReply 不一样 —— 那个关掉要人再拨回来。格式是 ISO 时间（2026-10-28T08:00:00+08:00）。
+    mutedUntil: z.string().default(''),
     // SnowLuma 装在哪：控制台那扇门要去它的 config/runtime.json 拿地址与端口。空着就按 D:\SnowLuma、
     // C:\SnowLuma、~/SnowLuma 挨个认（认「里面有 config/runtime.json」这一条）。
     snowlumaHome: z.string().default(''),
@@ -209,6 +212,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
                     contextMessages: q.contextMessages ?? 6,
                     groupTrigger: q.groupTrigger ?? 'mention',
                     groupKeywords: q.groupKeywords ?? [],
+                    mutedUntil: q.mutedUntil ?? '',
                     bridge: {
                       port: q.bridge?.port ?? 0,
                       token: q.bridge?.token ?? '',

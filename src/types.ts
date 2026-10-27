@@ -39,6 +39,8 @@ export interface WorldConfig {
     groupTrigger?: 'mention' | 'all';
     /** 群里命中这些词也算在叫她。 */
     groupKeywords?: string[];
+    /** 只停嘴不停耳：这个时间之前收得到、记得住，但一句都不回；到点自己醒。ISO 时间，空着就是没静默。 */
+    mutedUntil?: string;
     /** SnowLuma 装在哪；空着就靠猜（D:\SnowLuma、C:\SnowLuma、~/SnowLuma）。 */
     snowlumaHome?: string;
     /** 阳台：让这台机器上别的程序能跟家里说话（一行一条 JSON 的 WebSocket）。port 为 0 就不开。 */

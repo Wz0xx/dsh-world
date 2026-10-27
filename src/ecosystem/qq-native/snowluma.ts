@@ -166,7 +166,7 @@ export function segmentsToText(message: Loose) {
       // 图片段带上 file 名（短），上层用它调 get_image 就能换出带签名的直链；
       // 光写「[图片]」等于把图丢了 —— 2026-10-28 凌晨真踩过。
       case 'image': out.push(d.file ? `[图片 file=${d.file}]` : '[图片]'); break;
-      case 'record': out.push('[语音]'); break;
+      case 'record': out.push(d.file ? `[语音 file=${d.file}]` : '[语音]'); break;
       case 'video': out.push('[视频]'); break;
       case 'file': out.push(`[文件${d.name ?? ''}]`); break;
       case 'reply':
@@ -358,25 +358,77 @@ export function createBridge(options: Loose) {
   let faceCache: { at: number; list: string[] } | undefined;
 
   /** 收藏表情的 hex 清单，缓存 5 分钟：她只会说「第几个」。 */
-  async function resolveEmoji(want: Loose): Promise<string> {
-    const raw = String(want ?? '').trim();
-    if (raw && !/^\d{1,3}$/.test(raw)) return raw; // 已经是 hex id
+  /**
+   * 拉一次收藏表情的详情（id + 备注）。
+   *
+   * 只要 id 的话 `fetch_custom_face` 就够，但那样她只能按序号挑 —— 「发个开心的」办不到。
+   * 备注里本来就写着「炸毛生气（抱臂+青筋）」「爱心眼捧脸（好耶）」这种话，拿它当索引，
+   * 她按意思挑就行。5 分钟缓存一次。
+   */
+  let faceDetailCache: { at: number; list: { id: string; desc: string }[] } | null = null;
+  async function faceDetails(): Promise<{ id: string; desc: string }[]> {
     const botAtCall = client;
     if (!botAtCall) throw new Error('QQ 桥未启动或已停止，无法发收藏表情');
     const now = Date.now();
-    if (!faceCache || now - faceCache.at > 5 * 60_000) {
-      const res = (await withTimeout(
-        (botAtCall as Loose).request('fetch_custom_face', { count: 50, return_type: 'id' }),
-        SEND_TIMEOUT_MS,
-        'QQ拉收藏表情',
-      )) as Loose;
-      const list = Array.isArray(res?.data) ? res.data.map((x: Loose) => String(x)) : [];
-      faceCache = { at: now, list };
+    if (faceDetailCache && now - faceDetailCache.at < 5 * 60_000) return faceDetailCache.list;
+    const res = (await withTimeout(
+      (botAtCall as Loose).request('fetch_custom_face_detail', { count: 50 }),
+      SEND_TIMEOUT_MS,
+      'QQ拉收藏表情详情',
+    )) as Loose;
+    const arr = Array.isArray(res?.data) ? (res.data as Loose[]) : [];
+    const list = arr
+      .map((x: Loose) => ({ id: String(x?.emoji_id ?? ''), desc: String(x?.desc ?? '') }))
+      .filter((x: { id: string }) => x.id !== '');
+    faceDetailCache = { at: now, list };
+    return list;
+  }
+
+  async function resolveEmoji(want: Loose): Promise<string> {
+    const raw = String(want ?? '').trim();
+    if (raw.length > 20 || raw.includes('_')) return raw; // 已经是 hex id
+    const list = await faceDetails();
+    if (raw === '' || /^\d{1,3}$/.test(raw)) {
+      const index = Number(raw || '1');
+      const hit = list[index - 1];
+      if (!hit) throw new Error(`没有第 ${index} 个收藏表情（一共 ${list.length} 个）`);
+      return hit.id;
     }
-    const index = Number(raw || '1');
-    const id = faceCache.list[index - 1];
-    if (!id) throw new Error(`没有第 ${index} 个收藏表情（一共 ${faceCache.list.length} 个）`);
-    return id;
+    // 备注里写的是「好耶」「成了」「可以」，她想的可能是「开心」「赢了」「行」。
+    // 一张小同义表就够了 —— 不做这件小事，按内容挑就只是「按备注原文挑」，跟序号没差多少。
+    const ALIAS: Record<string, string[]> = {
+      开心: ['好耶', '成了', '可以', '舒服'],
+      高兴: ['好耶', '成了'],
+      生气: ['炸毛', '气'],
+      不懂: ['问号', '不懂'],
+      疑问: ['问号'],
+      求: ['拜托', '合十'],
+      拜托: ['合十', '拜托'],
+      钱: ['钱包', '钱来了'],
+      累: ['熬夜', '咖啡'],
+      困: ['睡觉', '抱枕头'],
+      睡: ['睡觉', '抱枕头'],
+      在: ['举手', '我在这'],
+      同意: ['可以', '比赞'],
+      赞: ['比赞', '可以'],
+      思考: ['思考中', '转圈'],
+      等我: ['思考中'],
+    };
+    const key = raw.toLowerCase();
+    const direct = list.find((x: { desc: string }) => x.desc.toLowerCase().includes(key));
+    if (direct) return direct.id;
+    // 「开心」这种词整句对不上时，允许按单字松一点地找（备注里常有括号、标点）。
+    const chars = [...key].filter((c: string) => c.trim() !== '');
+    const loose = list.find((x: { desc: string }) => {
+      const d = x.desc.toLowerCase();
+      return chars.every((c: string) => d.includes(c));
+    });
+    if (loose) return loose.id;
+    for (const alt of ALIAS[raw] ?? []) {
+      const hit = list.find((x: { desc: string }) => x.desc.includes(alt));
+      if (hit) return hit.id;
+    }
+    throw new Error(`没有跟「${raw}」对得上的收藏表情；现有：${list.map((x: { desc: string }) => x.desc).join(' / ')}`);
   }
   let stopped = true;   // start() 未调用、或已 stop()
 
