@@ -43,6 +43,7 @@ export interface WorldConfig {
     mutedUntil?: string;
     /** SnowLuma 装在哪；空着就靠猜（D:\SnowLuma、C:\SnowLuma、~/SnowLuma）。 */
     snowlumaHome?: string;
+  supervise?: boolean;
     /** 阳台：让这台机器上别的程序能跟家里说话（一行一条 JSON 的 WebSocket）。port 为 0 就不开。 */
     bridge?: { port?: number; token?: string; title?: string; contextMessages?: number };
   };

@@ -17,7 +17,8 @@ import { createOutlet } from './ecosystem/shared/outlets.ts';
 import { readPersona, writePersona } from './persona.ts';
 import { createQqNativeModule, type QqNativeModule } from './ecosystem/qq-native/index.ts';
 import { qqRoute } from './ecosystem/qq/route.ts';
-import { createConsoleDoors } from './ecosystem/qq/panel.ts';
+import { createConsoleDoors, discoverSnowlumaHome } from './ecosystem/qq/panel.ts';
+import { startSnowluma } from './ecosystem/qq/snowluma-start.ts';
 import { createWorldRuntime } from './runtime.ts';
 import { createArchiveStore } from './store.ts';
 import type { WorldConfig } from './types.ts';
@@ -70,6 +71,9 @@ export const Config = z.object({
     // SnowLuma 装在哪：控制台那扇门要去它的 config/runtime.json 拿地址与端口。空着就按 D:\SnowLuma、
     // C:\SnowLuma、~/SnowLuma 挨个认（认「里面有 config/runtime.json」这一条）。
     snowlumaHome: z.string().default(''),
+    // 插件自己盯着 SnowLuma：3003 不通就去拉。默认开 —— 别人装完不该还得手动建一个计划任务。
+    // 不想让它自己动手就把这个关掉，面板上的「拉起 SnowLuma」按钮照旧能用。
+    supervise: z.boolean().default(true),
     // 谁和她的家会话共用一个入口。'owner'（默认）＝群各自独立、私聊用她的家；'all'＝都用她的家；
     // 'none'＝谁都不绑，每个入口各建一个 —— 开发测试 QQ 的时候填 none，回合就不会走进步话生活的家里。
     bindHomeSession: z.union([z.const('owner').description('群各自独立，私聊用她的家会话'), z.const('all').description('都用她的家会话'), z.const('none').description('谁都不绑，每个入口各建一个'), z.const('')]).default('owner'),
@@ -152,6 +156,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         if (!qqNative) return null;
         if (patch.bridge) return qqNative.setBridge(patch.bridge);
         if (patch.mutedUntil !== undefined) return qqNative.setMuted(patch.mutedUntil);
+        // 只在这一步、只因为有人按了按钮，才去叫醒它。
+        if (patch.startSnowluma) return startSnowluma(config.qqNative?.snowlumaHome || discoverSnowlumaHome(''));
         return qqNative.setAutoReply(patch.autoReply === true);
       }),
     );
@@ -208,6 +214,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
                     accessToken: q.accessToken ?? '',
                     allowPrivate: q.allowPrivate ?? [],
                     ownerQQ: q.ownerQQ ?? '',
+                    snowlumaHome: q.snowlumaHome ?? '',
+                    supervise: q.supervise ?? true,
                     allowGroups: q.allowGroups ?? [],
                     autoReply: q.autoReply ?? true,
                     contextMessages: q.contextMessages ?? 6,

@@ -385,6 +385,15 @@ window.__ModuleLoader__.load({
           if (props.onSaved) props.onSaved()
         }, function (e) { setMsg('失败：' + ((e && e.message) || e)) }).then(function () { setBusy(false) })
       }
+      // 别人第一次装完，SnowLuma 往往还没起：这里一键叫醒它。看门狗也会自己拉，这个按钮是手动那一条。
+      function startSnow() {
+        setBusy(true); setMsg('')
+        qqPost('native', { startSnowluma: true }).then(function (r) {
+          if (r && r.started) setMsg('已经让 SnowLuma 起来' + (r.how === 'spawn' ? '（直接起的，这条线只活到 DSH 退出）' : '') + (r.error ? '；' + r.error : ''))
+          else setMsg('没起来：' + ((r && r.error) || '原因不明'))
+          if (props.onSaved) props.onSaved()
+        }, function (e) { setMsg('失败：' + ((e && e.message) || e)) }).then(function () { setBusy(false) })
+      }
       function whenText(iso) {
         if (!iso) return ''
         var d = new Date(iso)
@@ -453,8 +462,19 @@ window.__ModuleLoader__.load({
             ]),
           ])
         })(props.native),
+        (function (n) {
+          var sv = n && n.supervisor
+          if (!sv) return null
+          return h('div', { key: 'sv', className: 'dw-muted' },
+            (sv.watching ? '● 看门狗盯着' : '○ 看门狗没开')
+              + ' · 上次探 ' + (sv.lastCheckAt ? whenText(sv.lastCheckAt) : '—')
+              + (sv.alive ? ' · 那条线通着' : ' · 那条线不通')
+              + (sv.restarts ? ' · 已拉起来 ' + sv.restarts + ' 次' : '')
+              + (sv.lastError ? ' · ' + sv.lastError : ''))
+        })(props.native),
         h('div', { key: 'k', className: 'dw-setting' },
-          h('button', { className: 'dw-btn', disabled: busy, onClick: function () { openDoor('snowluma') } }, '打开 SnowLuma 控制台')),
+          h('button', { className: 'dw-btn', disabled: busy, onClick: function () { openDoor('snowluma') } }, '打开 SnowLuma 控制台'),
+          h('button', { className: 'dw-btn', disabled: busy, onClick: function () { startSnow() } }, '拉起 SnowLuma')),
         h('div', { key: 'b', className: 'dw-setting' },
           h('button', { className: 'dw-btn', disabled: busy, onClick: function () { if (props.onSaved) props.onSaved() } }, '刷新')),
         msg ? h('div', { key: 'x', className: msg.indexOf('失败') >= 0 ? 'dw-bad' : 'dw-muted' }, msg) : null,

@@ -6,6 +6,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent';
 import { speakerIdentity, conversationKey, type SpeakerIdentity } from '../shared/identity.ts';
 import type { ChannelContextMessage } from '../shared/context.ts';
 import { createBridge } from './snowluma.ts';
+import { createSnowlumaSupervisor, type SnowlumaStatus } from '../qq/supervisor.ts';
 import { createQqHome } from './home.ts';
 import { createNativeBridge, type BridgeStatus, type NativeBridge } from './native-bridge.ts';
 
@@ -51,6 +52,10 @@ export interface QqNativeConfig {
    * 白名单里可能有第二个人、顺序也可能变，那时候推的就不是主人了，所以要有这一项。
    */
   ownerQQ: string;
+  /** SnowLuma 装在哪儿。看门狗和「拉起来」按钮都靠它。 */
+  snowlumaHome: string;
+  /** 插件自己盯着 3003：不通就拉。默认开。 */
+  supervise: boolean;
   allowGroups: readonly string[];
   /** 她会不会回。关掉是「收到但不理」——连问都不问，不花调用。 */
   autoReply: boolean;
@@ -100,6 +105,8 @@ export interface QqNativeStatus {
   mutedUntil: string | null;
   /** 还没发出去、在队列里等重试的条数。 */
   outbox: number;
+  /** 看门狗：插件自己盯 SnowLuma 那条线的状态。 */
+  supervisor: SnowlumaStatus;
 }
 
 /**
@@ -178,6 +185,13 @@ export function createQqNativeModule(deps: {
   transport?(options: QqTransportOptions): QqTransport;
 }) {
   const home = createQqHome({ ctx: deps.ctx, home: deps.home });
+  // 看门狗：插件在，就盯着 SnowLuma 那条线。拉不起来只记不吼。
+  const supervisor = createSnowlumaSupervisor({
+    homeDir: deps.config().snowlumaHome,
+    host: '127.0.0.1',
+    port: Number(new URL(deps.config().wsUrl).port || 3003),
+    log: (message: string) => deps.logger.info(message),
+  });
   const seen = new Set<string>();
   const contexts = new Map<string, ChannelContextMessage[]>();
   const answering = new Set<string>();
@@ -230,10 +244,30 @@ export function createQqNativeModule(deps: {
   }
 
   /** 发一条；发不出去就排队，不往上游抛。 */
+  /** 最近一次回答是被谁问出来的：群还是私聊。群的话已经回给群了，不用再往私聊补。 */
+  let lastAsk: { isGroup: boolean; at: number } | null = null;
+
+  /** 刚发出去的文本，几秒内不再发第二遍：回复那条路和「自己的话」那条路不会各发一次。 */
+  const sentTexts = new Map<string, number>();
+  function noteSentText(parts: string | QqPart[]): void {
+    const text = typeof parts === 'string'
+      ? parts
+      : parts.filter((part) => part.type === 'text').map((part) => (part as { text: string }).text).join('');
+    if (!text) return;
+    const now = Date.now();
+    sentTexts.set(text.trim(), now);
+    for (const [key, at] of sentTexts) if (now - at > 120000) sentTexts.delete(key);
+  }
+  function alreadySent(text: string): boolean {
+    const at = sentTexts.get(text.trim());
+    return at !== undefined && Date.now() - at < 60000;
+  }
+
   async function sendOrQueue(kind: 'group' | 'private', target: string, parts: string | QqPart[]): Promise<void> {
     try {
       if (kind === 'group') rememberSent((await client?.sendGroup(target, parts))?.messageId);
       else rememberSent((await client?.sendPrivate(target, parts))?.messageId);
+      noteSentText(parts);
     } catch (error) {
       outbox.push({ kind, target, parts, tries: 1, firstAt: Date.now() });
       stats.lastError = error instanceof Error ? error.message : String(error);
@@ -445,6 +479,7 @@ export function createQqNativeModule(deps: {
         conversationType: identity.conversationType,
       });
       pushContext(key, { id: answer.id, occurredAt: new Date().toISOString(), text: answer.text, identity: herIdentity }, config.contextMessages);
+      lastAsk = { isGroup: identity.conversationType === 'group', at: Date.now() };
       const reply = answer.text.trim();
       if (!reply) return;
       const replyParts = buildReplyParts(reply);
@@ -501,7 +536,7 @@ export function createQqNativeModule(deps: {
     let pending: { sessionId: string; text: string } | null = null;
     deps.ctx.on('session/event', (session, event) => {
       const data = event.data as { source?: { kind?: string }; message?: { content?: Array<{ type: string; text?: string }> }; turn?: number };
-      if (event.type === 'user/message' && (data.source ?? {}).kind === 'dsh-world-life') {
+      if (event.type === 'user/message') {
         pending = { sessionId: session.id, text: '' };
         return;
       }
@@ -519,9 +554,12 @@ export function createQqNativeModule(deps: {
       const config = settings();
       const owner = config.ownerQQ || config.allowPrivate[0];
       if (!owner) return;
+      // 群里说的话已经回给群了：再往私聊抄一份，主人会看到两遍。
+      if (lastAsk && lastAsk.isGroup && Date.now() - lastAsk.at < 20000) return;
       void (async () => {
         const chunks = said.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
         for (let i = 0; i < chunks.length; i += 1) {
+          if (alreadySent(chunks[i])) continue;
           if (i > 0) await new Promise((resolve) => setTimeout(resolve, 600));
           await sendOrQueue('private', owner, chunks[i]);
         }
@@ -551,6 +589,7 @@ export function createQqNativeModule(deps: {
       return {
         enabled: config.enabled,
         connected: client?.getState() === 'online',
+        supervisor: supervisor.status(),
         url: config.wsUrl,
         allowPrivate: config.allowPrivate.length,
         allowGroups: config.allowGroups.length,
@@ -625,6 +664,8 @@ export function createQqNativeModule(deps: {
         },
       });
       client = bridge;
+      // 没写就是开：别人装完不该还得手动建计划任务。显式 false 才不盯着。
+      if (config.supervise !== false) supervisor.start();
       startBridge(config);
       watchOwnTurns();
       bridge.start().catch((error: unknown) => {
@@ -635,6 +676,7 @@ export function createQqNativeModule(deps: {
     stop() {
       if (stopped) return;
       stopped = true;
+      supervisor.stop();
       home.stop();
       nativeBridge?.stop(); nativeBridge = undefined;
       void client?.stop();

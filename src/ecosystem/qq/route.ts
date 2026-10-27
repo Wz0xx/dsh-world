@@ -40,7 +40,7 @@ function allowed(req: IncomingMessage, allowedHosts: readonly string[]): boolean
  *
  * `mutedUntil` 是 ISO 时间（`null` = 立刻恢复）—— 只停嘴不停耳，到点自己醒。
  */
-export interface NativePatch { autoReply?: boolean; bridge?: { port?: number }; mutedUntil?: string | null }
+export interface NativePatch { autoReply?: boolean; bridge?: { port?: number }; mutedUntil?: string | null; startSnowluma?: true }
 type SetNative = (patch: NativePatch) => unknown;
 
 async function write(doors: ConsoleDoors | undefined, path: string, body: Record<string, unknown> | undefined, setNative?: SetNative): Promise<JsonResult | undefined> {
@@ -65,7 +65,11 @@ async function write(doors: ConsoleDoors | undefined, path: string, body: Record
         if (typeof port !== 'number' || !Number.isInteger(port) || port < 0 || port > 65535) return bad('bridge.port 要是 0 到 65535 之间的整数');
         patch.bridge = { port };
       }
-      if (patch.autoReply === undefined && patch.bridge === undefined && patch.mutedUntil === undefined) return bad('autoReply、bridge、mutedUntil 至少要给一个');
+      // 手动拉起 SnowLuma：只认 true，别的一概不猜。
+      if (body?.startSnowluma === true) patch.startSnowluma = true;
+      if (patch.autoReply === undefined && patch.bridge === undefined && patch.mutedUntil === undefined && patch.startSnowluma === undefined) {
+        return bad('autoReply、bridge、mutedUntil、startSnowluma 至少要给一个');
+      }
       return ok(setNative(patch));
     }
     case '/open': {

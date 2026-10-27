@@ -98,6 +98,12 @@ QQ 走插件自己那条原生通道：直接连 SnowLuma 开出来的 OneBot We
 
 卡上那个「打开 SnowLuma 控制台」的按钮，读 `snowlumaHome` 下 `config/runtime.json` 里的地址与端口，带着一次性登录票据打开系统浏览器——第一次要先填一次 SnowLuma 的面板密码，之后记在世界目录的 `panel.json` 里（权限 600），不用再输。
 
+**给别人的接入步骤**：从装插件到填 token 到验证，一步一步写在 [docs/QQ-接入步骤.md](docs/QQ-接入步骤.md) 里——那份是给「替用户装插件的人或 AI」看的，可以照着念。里面也标了哪几步只能用户本人动手（SnowLuma 自己的 EULA 不许脚本安装）。
+
+**看门狗（2026-10-28 起做进插件）**：插件自己盯着这条线——每 30 秒探一次 `wsUrl` 的端口，不通就按 `snowlumaHome` 把 SnowLuma 拉起来（优先借它自己的计划任务，没有就直接起进程）。以前这活靠 `~/.dsh/tools/snowluma-watchdog.ps1` 加一个 Windows 计划任务干，别人装插件还得手动建一次；现在不用了，插件在就盯着。拉不起来只把原因记在卡片上（`lastError`），不反复刷日志。`qqNative.supervise: false` 可以关掉它自己动手。
+
+卡片上那个「拉起 SnowLuma」是手动那一条：SnowLuma 没起、你又想立刻叫醒它的时候按一下，比等下一轮探测快。它和看门狗走同一条路（`startSnowluma`），所以按下去的结果和看门狗自己拉是一样的。
+
 ## 安装
 
 需要 DSH 桌面版，世界控制台和生活线都依赖它。
@@ -155,6 +161,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\enable-tool-free-c
       groupKeywords: []          # groupTrigger: mention 时算「在叫她」的词
       bindHomeSession: owner     # owner：主人私聊用家会话、群各自独立；all：都用；none：各建一个
       snowlumaHome: ''           # SnowLuma 安装目录，控制台那扇门用它找 config/runtime.json
+      supervise: true            # 插件自己盯着这条线：端口不通就拉 SnowLuma（不用再建计划任务）
       # proactive: { enabled: false, dryRun: true }   # 主动开口，默认关，规则见 INSTALL.md
 ```
 
