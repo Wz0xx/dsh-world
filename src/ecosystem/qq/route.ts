@@ -35,8 +35,12 @@ function allowed(req: IncomingMessage, allowedHosts: readonly string[]): boolean
   return knownHost(req.headers.host, allowedHosts);
 }
 
-/** What the panel may change about her own channel: replying, and the balcony's port. */
-export interface NativePatch { autoReply?: boolean; bridge?: { port?: number } }
+/**
+ * What the panel may change about her own channel: replying, the balcony's port, and when to stay quiet.
+ *
+ * `mutedUntil` 是 ISO 时间（`null` = 立刻恢复）—— 只停嘴不停耳，到点自己醒。
+ */
+export interface NativePatch { autoReply?: boolean; bridge?: { port?: number }; mutedUntil?: string | null }
 type SetNative = (patch: NativePatch) => unknown;
 
 async function write(doors: ConsoleDoors | undefined, path: string, body: Record<string, unknown> | undefined, setNative?: SetNative): Promise<JsonResult | undefined> {
@@ -45,6 +49,13 @@ async function write(doors: ConsoleDoors | undefined, path: string, body: Record
       if (!setNative) return bad('原生通道没有接上');
       const patch: NativePatch = {};
       if (typeof body?.autoReply === 'boolean') patch.autoReply = body.autoReply;
+      // 静默：给一个时间点，到点前只收不回；给 null 或空串就是立刻恢复。
+      if (body?.mutedUntil !== undefined) {
+        const raw = body.mutedUntil;
+        if (raw !== null && typeof raw !== 'string') return bad('mutedUntil 要是 ISO 时间字符串，或者 null');
+        if (typeof raw === 'string' && raw.trim() !== '' && Number.isNaN(Date.parse(raw))) return bad('mutedUntil 不是能解析的时间');
+        patch.mutedUntil = raw === null ? null : String(raw);
+      }
       // 阳台：外面那条线开在哪个端口。换端口会打断已经连上的线，所以只认一个整数，别的一律拒。
       const rawBridge = body?.bridge;
       if (rawBridge !== undefined) {
@@ -54,7 +65,7 @@ async function write(doors: ConsoleDoors | undefined, path: string, body: Record
         if (typeof port !== 'number' || !Number.isInteger(port) || port < 0 || port > 65535) return bad('bridge.port 要是 0 到 65535 之间的整数');
         patch.bridge = { port };
       }
-      if (patch.autoReply === undefined && patch.bridge === undefined) return bad('autoReply、bridge 至少要给一个');
+      if (patch.autoReply === undefined && patch.bridge === undefined && patch.mutedUntil === undefined) return bad('autoReply、bridge、mutedUntil 至少要给一个');
       return ok(setNative(patch));
     }
     case '/open': {

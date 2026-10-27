@@ -151,6 +151,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       qqRoute(config.allowedHosts, doors, () => qqNative?.status() ?? null, patch => {
         if (!qqNative) return null;
         if (patch.bridge) return qqNative.setBridge(patch.bridge);
+        if (patch.mutedUntil !== undefined) return qqNative.setMuted(patch.mutedUntil);
         return qqNative.setAutoReply(patch.autoReply === true);
       }),
     );
