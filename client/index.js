@@ -376,6 +376,22 @@ window.__ModuleLoader__.load({
           if (props.onSaved) props.onSaved()
         }, function (e) { setMsg('失败：' + ((e && e.message) || e)) }).then(function () { setBusy(false) })
       }
+      // 静默：给一个时间点，到点前只收不回；给 null 立刻恢复。只停嘴，不停耳朵。
+      var muteState = useState(''), muteAt = muteState[0], setMuteAt = muteState[1]
+      function setMute(until) {
+        setBusy(true); setMsg('')
+        qqPost('native', { mutedUntil: until }).then(function () {
+          setMsg('')
+          if (props.onSaved) props.onSaved()
+        }, function (e) { setMsg('失败：' + ((e && e.message) || e)) }).then(function () { setBusy(false) })
+      }
+      function whenText(iso) {
+        if (!iso) return ''
+        var d = new Date(iso)
+        if (isNaN(d.getTime())) return iso
+        function two(n) { return n < 10 ? '0' + n : String(n) }
+        return two(d.getMonth() + 1) + '-' + two(d.getDate()) + ' ' + two(d.getHours()) + ':' + two(d.getMinutes())
+      }
       function copyLine(text) {
         if (!text) { setMsg('这条命令还没生出来'); return }
         if (!navigator.clipboard) { setMsg('这个浏览器不给复制，自己选上面那行'); return }
@@ -396,6 +412,25 @@ window.__ModuleLoader__.load({
             h('input', { key: 'c', type: 'checkbox', checked: n.autoReply === true, disabled: busy,
               onChange: function (e) { flipNative(e.target.checked) } }),
             h('span', { key: 't' }, n.autoReply === true ? ' 会自己回话' : ' 只看不回'),
+          ])
+        })(props.native),
+        (function (n) {
+          if (!n) return null
+          var muted = n.muted === true
+          return h('div', { key: 'nm', className: 'dw-setting' }, [
+            h('span', { key: 's', className: muted ? 'dw-bad' : 'dw-muted' },
+              muted ? '静默到 ' + whenText(n.mutedUntil) + '（只收不回）' : '现在会出声'),
+            h('input', { key: 'i', type: 'datetime-local', disabled: busy, value: muteAt,
+              style: { marginLeft: 8 },
+              onInput: function (e) { setMuteAt(e.target.value) } }),
+            h('button', { key: 'b', className: 'dw-btn', disabled: busy || !muteAt,
+              onClick: function () {
+                var d = new Date(muteAt)
+                if (isNaN(d.getTime())) { setMsg('这个时间看不懂，重挑一下'); return }
+                setMute(d.toISOString())
+              } }, '静默到这个点'),
+            muted ? h('button', { key: 'r', className: 'dw-btn', disabled: busy,
+              onClick: function () { setMute(null) } }, '立刻恢复') : null,
           ])
         })(props.native),
         (function (n) {
