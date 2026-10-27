@@ -54,6 +54,9 @@ export const Config = z.object({
     wsUrl: z.string().default('ws://127.0.0.1:3003'),
     accessToken: z.string().default(''),
     allowPrivate: z.array(z.string()).default([]),
+    // 她自己开口时推给谁。空着退回 allowPrivate 的第一个；白名单超过一个人时一定要填，
+    // 否则「推给主人」会变成「推给白名单第一个人」。
+    ownerQQ: z.string().default(''),
     allowGroups: z.array(z.string()).default([]),
     autoReply: z.boolean().default(true),
     contextMessages: z.number().default(6),
@@ -200,6 +203,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
                     wsUrl: q.wsUrl ?? 'ws://127.0.0.1:3003',
                     accessToken: q.accessToken ?? '',
                     allowPrivate: q.allowPrivate ?? [],
+                    ownerQQ: q.ownerQQ ?? '',
                     allowGroups: q.allowGroups ?? [],
                     autoReply: q.autoReply ?? true,
                     contextMessages: q.contextMessages ?? 6,

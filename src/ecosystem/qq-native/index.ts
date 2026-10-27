@@ -44,6 +44,13 @@ export interface QqNativeConfig {
   accessToken: string;
   /** QQ numbers allowed to talk to her at all; empty means nobody. */
   allowPrivate: readonly string[];
+  /**
+   * 她自己开口时（时间轮说完的那一轮）推给谁。
+   *
+   * 空着就退回 allowPrivate 的第一个 —— 只留一个主人的用法照旧能用。但插件是给别人用的，
+   * 白名单里可能有第二个人、顺序也可能变，那时候推的就不是主人了，所以要有这一项。
+   */
+  ownerQQ: string;
   allowGroups: readonly string[];
   /** 她会不会回。关掉是「收到但不理」——连问都不问，不花调用。 */
   autoReply: boolean;
@@ -92,12 +99,51 @@ export interface QqNativeStatus {
  * so a group keeps talking to the same conversation she already has for it.
  */
 /** 传输层交给通道的那几件（真身上是 snowluma.js 的 createBridge，测试可以换掉）。 */
+/** 一条 QQ 消息可以带的东西。text/at/image/face 是 snowluma.ts 的 buildSegments 认的那几种。 */
+export type QqPart =
+  | { type: 'text'; text: string }
+  | { type: 'at'; qq: string }
+  | { type: 'image'; file: string }
+  | { type: 'face'; id: string }
+  /** 账号收藏表情。**不是消息段**，走 send_custom_face 单发一条。 */
+  | { type: 'sticker'; emojiId: string };
+
 export interface QqTransport {
   start(): Promise<void>;
   stop(): Promise<void>;
   getState(): string;
-  sendGroup(groupId: string, text: string): Promise<{ messageId: string }>;
-  sendPrivate(userId: string, text: string): Promise<{ messageId: string }>;
+  sendGroup(groupId: string, parts: string | QqPart[]): Promise<{ messageId: string }>;
+  sendPrivate(userId: string, parts: string | QqPart[]): Promise<{ messageId: string }>;
+  /** 发账号收藏表情；测试桩可以不实现。 */
+  sendCustomFace?(
+    emojiId: string,
+    target: { groupId?: string; userId?: string },
+  ): Promise<{ messageId: string }>;
+}
+
+/**
+ * 把她这句话里的 `[[img:路径]]` / `[[face:id]]` / `[[at:qq]]` 切成段。
+ *
+ * 为什么用标记而不是让整条回复变成 JSON：她说的是人话，绝大多数条目都是纯文本，
+ * 标记只在真要发图/表情时才出现；没有标记就原样返回一个字符串，走的是和以前完全一样的那条路。
+ * 方括号叠两层的写法不常见，不会误伤 markdown 里的 `[文字](链接)`。
+ */
+export function buildReplyParts(text: string): string | QqPart[] {
+  const tag = /\[\[(img|face|at|sticker):([^\[\]]+)\]\]/g;
+  const parts: QqPart[] = [];
+  let last = 0;
+  for (let m = tag.exec(text); m; m = tag.exec(text)) {
+    if (m.index > last) parts.push({ type: 'text', text: text.slice(last, m.index) });
+    const value = m[2].trim();
+    if (m[1] === 'img') parts.push({ type: 'image', file: value });
+    else if (m[1] === 'face') parts.push({ type: 'face', id: value });
+    else if (m[1] === 'sticker') parts.push({ type: 'sticker', emojiId: value });
+    else parts.push({ type: 'at', qq: value });
+    last = m.index + m[0].length;
+  }
+  if (!parts.length) return text;
+  if (last < text.length) parts.push({ type: 'text', text: text.slice(last) });
+  return parts;
 }
 
 /** createBridge 认的那几个选项，通道只用到这几个。 */
@@ -124,6 +170,10 @@ export function createQqNativeModule(deps: {
   const seen = new Set<string>();
   const contexts = new Map<string, ChannelContextMessage[]>();
   const answering = new Set<string>();
+  const BATCH_QUIET_MS = 10_000;
+  const BATCH_MAX_MS = 30_000;
+  const batches = new Map<string, { identity: SpeakerIdentity; entries: { text: string; who: string }[]; timer: ReturnType<typeof setTimeout> }>();
+  const batchOpenedAt = new Map<string, number>();
   // 她自己的那条线：最后一次见到的账号。
   let lastSelfId = '';
   let client: QqTransport | undefined;
@@ -265,7 +315,51 @@ export function createQqNativeModule(deps: {
       pushContext(key, { id: messageId || `${Date.now()}`, occurredAt: new Date().toISOString(), text, identity }, config.contextMessages);
       return;
     }
+    enqueue(key, text, identity, speakerName);
+  /**
+   * 合批：同一会话里 10 秒内的话攒成一条再问她。人连着发两三条是常态，每条各跑一轮
+   * 等于拿半句话问她两次。窗口从最后一条算起（安静 10 秒就送），但从第一条起最多等
+   * 30 秒，免得群里一直有人说话、它永远不开口。
+   */
+  function enqueue(key: string, text: string, identity: SpeakerIdentity, who: string): void {
+    const now = Date.now();
+    const live = batches.get(key);
+    if (live) {
+      live.entries.push({ text, who });
+      live.identity = identity;
+    } else {
+      batches.set(key, { identity, entries: [{ text, who }], timer: undefined as unknown as ReturnType<typeof setTimeout> });
+      batchOpenedAt.set(key, now);
+    }
+    const batch = batches.get(key)!;
+    const openedAt = batchOpenedAt.get(key) ?? now;
+    const wait = Math.max(0, Math.min(BATCH_QUIET_MS, BATCH_MAX_MS - (now - openedAt)));
+    clearTimeout(batch.timer);
+    batch.timer = setTimeout(() => { void flushBatch(key); }, wait);
+    answering.add(key);
+  }
+
+  async function flushBatch(key: string): Promise<void> {
+    const batch = batches.get(key);
+    if (!batch) return;
+    // 攒的这十秒里开关可能被关掉：那时候别问、也别发。
+    if (stopped || !settings().autoReply) {
+      batches.delete(key);
+      batchOpenedAt.delete(key);
+      clearTimeout(batch.timer);
+      answering.delete(key);
+      return;
+    }
+    batches.delete(key);
+    batchOpenedAt.delete(key);
+    clearTimeout(batch.timer);
+    const identity = batch.identity;
+    const config = settings();
     const context = contexts.get(key) ?? [];
+    const text = batch.entries.length === 1
+      ? batch.entries[0].text
+      : batch.entries.map((entry) => (entry.who ? `${entry.who}: ${entry.text}` : entry.text)).join('\n');
+
     answering.add(key);
     try {
       const answer = await home.ask(text, identity, context);
@@ -281,14 +375,37 @@ export function createQqNativeModule(deps: {
       pushContext(key, { id: answer.id, occurredAt: new Date().toISOString(), text: answer.text, identity: herIdentity }, config.contextMessages);
       const reply = answer.text.trim();
       if (!reply) return;
-      if (isGroup) rememberSent((await client?.sendGroup(conversationId, reply))?.messageId);
-      else rememberSent((await client?.sendPrivate(conversationId, reply))?.messageId);
+      const replyParts = buildReplyParts(reply);
+      // 收藏表情不是消息段（send_custom_face 单独一条），先摘出来单发，其余照旧一次发完。
+      const stickers = Array.isArray(replyParts)
+        ? replyParts.filter((part): part is { type: 'sticker'; emojiId: string } => part.type === 'sticker')
+        : [];
+      const rest = Array.isArray(replyParts) ? replyParts.filter((part) => part.type !== 'sticker') : replyParts;
+      const hasRest = typeof rest === 'string' ? rest.trim().length > 0 : rest.length > 0;
+      if (hasRest) {
+        // 中间有空行就拆成几条发 —— 2026-10-28 00:51 他定的规矩：长回答分两段，
+        // 一条塞到底的观感像公告，不像人在说话。
+        const chunks: Array<string | QqPart[]> = typeof rest === 'string'
+          ? rest.split(/\n{2,}/).map((s) => s.trim()).filter(Boolean)
+          : [rest];
+        for (let i = 0; i < chunks.length; i += 1) {
+          if (i > 0) await new Promise((r) => setTimeout(r, 600));
+          const chunk = chunks[i];
+          if (isGroup) rememberSent((await client?.sendGroup(conversationId, chunk))?.messageId);
+          else rememberSent((await client?.sendPrivate(conversationId, chunk))?.messageId);
+        }
+      }
+      for (const sticker of stickers) {
+        const target = isGroup ? { groupId: conversationId } : { userId: conversationId };
+        await client?.sendCustomFace?.(sticker.emojiId, target);
+      }
       stats.sent += 1;
     } catch (error) {
       stats.failed += 1;
       stats.lastError = error instanceof Error ? error.message : String(error);
       deps.logger.warn(`QQ 回复 ${key} 失败: ${stats.lastError}`);
     } finally { answering.delete(key); }
+  }
   }
 
     /**
@@ -302,6 +419,45 @@ export function createQqNativeModule(deps: {
    * `qq-bridge`），所以它跟她别的会话互不打扰。口令落在世界目录（qq-bridge.json），
    * 重启 DSH 对面那份配置不用改。
    */
+  /**
+   * 她自己的时间轮不该只落在日记里。
+   *
+   * life 注入的那条（source.kind = dsh-world-life）不是回谁的消息，通道因此不会把这一轮的话
+   * 送出去 —— 只有「主人先说话、我再回」那条路会推 QQ。这里补上另一半：这一轮是她自己开的，
+   * 说完就亲手推一份给主人，按空行分段。
+   */
+  function watchOwnTurns(): void {
+    let pending: { sessionId: string; text: string } | null = null;
+    deps.ctx.on('session/event', (session, event) => {
+      const data = event.data as { source?: { kind?: string }; message?: { content?: Array<{ type: string; text?: string }> }; turn?: number };
+      if (event.type === 'user/message' && (data.source ?? {}).kind === 'dsh-world-life') {
+        pending = { sessionId: session.id, text: '' };
+        return;
+      }
+      if (!pending || session.id !== pending.sessionId) return;
+      if (event.type === 'assistant/message') {
+        pending.text = (data.message?.content ?? [])
+          .flatMap((block) => (block.type === 'text' ? [block.text ?? ''] : []))
+          .join('\n');
+        return;
+      }
+      if (event.type !== 'turn/end') return;
+      const said = pending.text.trim();
+      pending = null;
+      if (!said) return;
+      const config = settings();
+      const owner = config.ownerQQ || config.allowPrivate[0];
+      if (!owner) return;
+      void (async () => {
+        const chunks = said.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
+        for (let i = 0; i < chunks.length; i += 1) {
+          if (i > 0) await new Promise((resolve) => setTimeout(resolve, 600));
+          await client?.sendPrivate?.(owner, chunks[i]);
+        }
+      })().catch((error: unknown) => deps.logger.warn('时间轮的话没能推给主人：', error));
+    });
+  }
+
   function startBridge(config: QqNativeConfig): void {
     if (nativeBridge || !config.bridge.port) return;
     nativeBridge = createNativeBridge({
@@ -384,6 +540,7 @@ export function createQqNativeModule(deps: {
       });
       client = bridge;
       startBridge(config);
+      watchOwnTurns();
       bridge.start().catch((error: unknown) => {
         stats.lastError = error instanceof Error ? error.message : String(error);
         deps.logger.warn('QQ 原生通道首次连接失败：', stats.lastError);

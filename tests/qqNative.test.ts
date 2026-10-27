@@ -51,6 +51,7 @@ const configOf = (over: Partial<QqNativeConfig> = {}): QqNativeConfig => ({
   wsUrl: 'ws://127.0.0.1:1',
   accessToken: '',
   allowPrivate: ['3475994805'],
+  ownerQQ: '',
   allowGroups: ['681528723'],
   autoReply: true,
   contextMessages: 3,

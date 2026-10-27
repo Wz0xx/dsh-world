@@ -163,7 +163,9 @@ export function segmentsToText(message: Loose) {
       case 'face': out.push(`[表情${d.id ?? ''}]`); break;
       // 市场表情（mface）在部分网关实现里出现：有 summary 就用它，别让模型只看到 "[mface]"。
       case 'mface': out.push(`[表情${d.summary ? `:${d.summary}` : ''}]`); break;
-      case 'image': out.push('[图片]'); break;
+      // 图片段带上 file 名（短），上层用它调 get_image 就能换出带签名的直链；
+      // 光写「[图片]」等于把图丢了 —— 2026-10-28 凌晨真踩过。
+      case 'image': out.push(d.file ? `[图片 file=${d.file}]` : '[图片]'); break;
       case 'record': out.push('[语音]'); break;
       case 'video': out.push('[视频]'); break;
       case 'file': out.push(`[文件${d.name ?? ''}]`); break;
@@ -353,6 +355,29 @@ export function createBridge(options: Loose) {
   let state = 'closed';
   /** @type {SnowLumaWebSocketClient|null} */
   let client: Loose = null;
+  let faceCache: { at: number; list: string[] } | undefined;
+
+  /** 收藏表情的 hex 清单，缓存 5 分钟：她只会说「第几个」。 */
+  async function resolveEmoji(want: Loose): Promise<string> {
+    const raw = String(want ?? '').trim();
+    if (raw && !/^\d{1,3}$/.test(raw)) return raw; // 已经是 hex id
+    const botAtCall = client;
+    if (!botAtCall) throw new Error('QQ 桥未启动或已停止，无法发收藏表情');
+    const now = Date.now();
+    if (!faceCache || now - faceCache.at > 5 * 60_000) {
+      const res = (await withTimeout(
+        (botAtCall as Loose).request('fetch_custom_face', { count: 50, return_type: 'id' }),
+        SEND_TIMEOUT_MS,
+        'QQ拉收藏表情',
+      )) as Loose;
+      const list = Array.isArray(res?.data) ? res.data.map((x: Loose) => String(x)) : [];
+      faceCache = { at: now, list };
+    }
+    const index = Number(raw || '1');
+    const id = faceCache.list[index - 1];
+    if (!id) throw new Error(`没有第 ${index} 个收藏表情（一共 ${faceCache.list.length} 个）`);
+    return id;
+  }
   let stopped = true;   // start() 未调用、或已 stop()
 
   // 上层回调的异常只记日志，不允许打断收发主链路（SDK 会把 handler 抛错吞进 error 事件，
@@ -526,6 +551,44 @@ export function createBridge(options: Loose) {
       const id = Number(userId);
       if (!Number.isFinite(id)) throw new Error(`sendPrivate: 无效的 QQ 号 ${JSON.stringify(userId ?? null)}`);
       return enqueueSend('private', id, parts);
+    },
+
+    /**
+     * 发账号收藏表情。**不是消息段** —— 它走 `send_custom_face` action，跟图片那种
+     * `image` 段不是一回事，所以只能单发一条，塞不进 sendPrivate 的 parts 里。
+     * emojiId 来自 `fetch_custom_face`（return_type=id）或 `fetch_custom_face_detail`。
+     */
+    async sendCustomFace(emojiId: Loose, target: { groupId?: Loose; userId?: Loose }) {
+      const botAtCall = client;
+      if (!botAtCall) {
+        return Promise.reject(new Error('QQ 桥未启动或已停止，无法发收藏表情'));
+      }
+      const gid = target?.groupId;
+      const uid = target?.userId;
+      if ((gid == null && uid == null) || (gid != null && uid != null)) {
+        return Promise.reject(new Error('sendCustomFace: 群号和 QQ 号必须且只能给一个'));
+      }
+      // 她记不住 15 串 hex：传 1..N 就按序号取（列表 5 分钟缓存一次）。
+      const emoji = await resolveEmoji(emojiId);
+      const params = gid != null
+        ? { emoji_id: emoji, group_id: Number(gid) }
+        : { emoji_id: emoji, user_id: Number(uid) };
+      const task = sendChain.then(async () => {
+        const raw = await withTimeout(
+          (botAtCall as Loose).request('send_custom_face', params),
+          SEND_TIMEOUT_MS,
+          `QQ发收藏表情`,
+        );
+        return { messageId: String((raw as Loose)?.data?.message_id ?? '') };
+      });
+      sendChain = task.then(
+        () => sleep(sendDelayMs),
+        (error) => {
+          log('error', `QQ 发收藏表情失败: ${(error as Loose)?.message ?? error}`);
+          return sleep(sendDelayMs);
+        },
+      );
+      return task;
     },
 
     /** @returns {BridgeState} */
