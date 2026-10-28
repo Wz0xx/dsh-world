@@ -431,8 +431,9 @@ export function createQqNativeModule(deps: {
     const now = Date.now();
     const live = batches.get(key);
     if (live) {
+      // 只追加内容，不覆盖 identity：一覆盖，整条消息的 speakerId 就变成最后说话那个人，
+      // 前面谁说的全丢了（2026-10-28 11:0x 真踩到：群里两个号说话，记录里只剩后一个）。
       live.entries.push({ text, who });
-      live.identity = identity;
     } else {
       batches.set(key, { identity, entries: [{ text, who }], timer: undefined as unknown as ReturnType<typeof setTimeout> });
       batchOpenedAt.set(key, now);
@@ -460,11 +461,14 @@ export function createQqNativeModule(deps: {
     batchOpenedAt.delete(key);
     clearTimeout(batch.timer);
     const identity = batch.identity;
+    const isGroup = identity.conversationType === 'group';
     const config = settings();
     const context = contexts.get(key) ?? [];
     const text = batch.entries.length === 1
       ? batch.entries[0].text
-      : batch.entries.map((entry) => (entry.who ? `${entry.who}: ${entry.text}` : entry.text)).join('\n');
+      : batch.entries
+          .map((entry) => (isGroup && entry.who ? `${entry.who}: ${entry.text}` : entry.text))
+          .join('\n');
 
     answering.add(key);
     try {
