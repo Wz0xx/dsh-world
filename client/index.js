@@ -431,7 +431,8 @@ window.__ModuleLoader__.load({
         if (!navigator.clipboard) { setMsg('这个浏览器不给复制，自己选上面那行'); return }
         navigator.clipboard.writeText(text).then(function () { setMsg('命令已复制') }, function () { setMsg('复制失败，自己选上面那行') })
       }
-      return h(Card, { title: 'QQ', delay: 240 }, [
+      return h('div', { className: 'dw-pane' },
+        h(Card, { title: '连线', delay: 0 }, [
         props.native ? (function (n) {
           if (!n) return h('div', { key: 'n', className: 'dw-muted' }, '她自己的通道：没开')
           return h('div', { key: 'n' }, [
@@ -440,6 +441,22 @@ window.__ModuleLoader__.load({
             n.lastError ? h('span', { key: 'c', className: 'dw-bad' }, ' · ' + n.lastError) : null,
           ])
         })(props.native) : h('div', { key: 'n', className: 'dw-muted' }, '她自己的通道：没开（配置里 qqNative.enabled）'),
+        (function (n) {
+          var sv = n && n.supervisor
+          if (!sv) return null
+          return h('div', { key: 'sv', className: 'dw-muted' },
+            (sv.watching ? '● 看门狗盯着' : '○ 看门狗没开')
+              + ' · 上次探 ' + (sv.lastCheckAt ? whenText(sv.lastCheckAt) : '—')
+              + (sv.alive ? ' · 那条线通着' : ' · 那条线不通')
+              + (sv.restarts ? ' · 已拉起来 ' + sv.restarts + ' 次' : '')
+              + (sv.lastError ? ' · ' + sv.lastError : ''))
+        })(props.native),
+        h('div', { key: 'k', className: 'dw-setting' },
+          h('button', { className: 'dw-btn', disabled: busy, onClick: function () { openDoor('snowluma') } }, '打开 SnowLuma 控制台'),
+          h('button', { className: 'dw-btn', disabled: busy, onClick: function () { startSnow() } }, '拉起 SnowLuma')),
+        ]),
+        h('div', { className: 'dw-grid' },
+          h(Card, { title: '什么时候说话', delay: 60 }, [
         (function (n) {
           if (!n) return null
           return h('label', { key: 'nt', className: 'dw-setting', style: { cursor: 'pointer' } }, [
@@ -467,6 +484,8 @@ window.__ModuleLoader__.load({
               onClick: function () { setMute(null) } }, '立刻恢复') : null,
           ])
         })(props.native),
+          ]),
+          h(Card, { title: '接谁的话', delay: 120 }, [
         (function (n) {
           if (!n) return null
           return h('div', { key: 'na', className: 'dw-setting', style: { flexWrap: 'wrap', gap: 6 } }, [
@@ -483,6 +502,8 @@ window.__ModuleLoader__.load({
               '多个用逗号隔开；留空就是谁都进不来。改完不用重启。'),
           ])
         })(props.native),
+          ])),
+        h(Card, { title: '阳台', delay: 180 }, [
         (function (n) {
           if (!n) return null
           var b = n.bridge
@@ -503,23 +524,11 @@ window.__ModuleLoader__.load({
             ]),
           ])
         })(props.native),
-        (function (n) {
-          var sv = n && n.supervisor
-          if (!sv) return null
-          return h('div', { key: 'sv', className: 'dw-muted' },
-            (sv.watching ? '● 看门狗盯着' : '○ 看门狗没开')
-              + ' · 上次探 ' + (sv.lastCheckAt ? whenText(sv.lastCheckAt) : '—')
-              + (sv.alive ? ' · 那条线通着' : ' · 那条线不通')
-              + (sv.restarts ? ' · 已拉起来 ' + sv.restarts + ' 次' : '')
-              + (sv.lastError ? ' · ' + sv.lastError : ''))
-        })(props.native),
-        h('div', { key: 'k', className: 'dw-setting' },
-          h('button', { className: 'dw-btn', disabled: busy, onClick: function () { openDoor('snowluma') } }, '打开 SnowLuma 控制台'),
-          h('button', { className: 'dw-btn', disabled: busy, onClick: function () { startSnow() } }, '拉起 SnowLuma')),
+        ]),
         h('div', { key: 'b', className: 'dw-setting' },
           h('button', { className: 'dw-btn', disabled: busy, onClick: function () { if (props.onSaved) props.onSaved() } }, '刷新')),
         msg ? h('div', { key: 'x', className: msg.indexOf('失败') >= 0 ? 'dw-bad' : 'dw-muted' }, msg) : null,
-      ])
+      )
     }
     /**
      * 第一次打开 SnowLuma 控制台时，得先用面板密码换一个会话令牌：那令牌只活在那边的进程内存里，重启就没了。
@@ -602,7 +611,7 @@ window.__ModuleLoader__.load({
           h(Budget, { budget: snap.budget, onSaved: props.refresh }),
           snap.modules && (snap.modules.wechat.available || snap.modules.qq.available) ? h(Modules, { modules: snap.modules, running: snap.running, onSaved: props.refresh }) : null,
           snap.wechat ? h(Wechat, { wechat: snap.wechat, zone: zone, onSaved: props.refresh }) : null,
-          snap.native ? h(Qq, { native: snap.native, onSaved: props.refresh, onNeedPassword: props.onNeedPassword }) : null))
+          null))
     }
     function Records(props) {
       var snap = props.snap, zone = snap.timeZone, life = snap.life, compactions = list(snap.compactions)
@@ -619,7 +628,7 @@ window.__ModuleLoader__.load({
     var pct = function (a, b) { return b > 0 ? Math.round((a / b) * 100) + '%' : '—' }
 
 
-    var TABS = [['overview', '概览'], ['persona', '人设'], ['prompt', '世界提示词'], ['records', '记录']]
+    var TABS = [['overview', '概览'], ['persona', '人设'], ['prompt', '世界提示词'], ['records', '记录'], ['qq', 'QQ']]
     /** 一份快照的画面；life 为 null（停着，或生活线没能启动）或缺了哪一块都不会崩。 */
     function View(props) {
       var snap = props.snap, error = props.error
@@ -648,6 +657,7 @@ window.__ModuleLoader__.load({
         tab === 'persona' ? h(PersonaEditor, { onSaved: props.refresh }) : null,
         tab === 'prompt' ? h(PromptEditor) : null,
         tab === 'records' ? h(Records, { snap: snap, tick: props.tick }) : null,
+        tab === 'qq' ? (snap.native ? h(Qq, { native: snap.native, onSaved: props.refresh, onNeedPassword: setPanel }) : h('div', { className: 'dw-pane' }, h(Card, null, h('div', { className: 'dw-muted' }, 'QQ 通道没开（配置里 qqNative.enabled）')))) : null,
           panel ? h(Panel, { kind: panel, onClose: function () { setPanel(null) } }) : null)
     }
 
