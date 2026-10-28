@@ -613,6 +613,24 @@ export function createBridge(options: Loose) {
      * `image` 段不是一回事，所以只能单发一条，塞不进 sendPrivate 的 parts 里。
      * emojiId 来自 `fetch_custom_face`（return_type=id）或 `fetch_custom_face_detail`。
      */
+    /**
+     * 发一条 QQ 空间说说。走 `send_qzone_msg`：正文必填，图片可选（file:// http:// base64:// 都认，
+     * 服务端自己上传），`ugcRight` 不填就是 1（所有人可见）。
+     */
+    async publishQzone(content: string, options?: { images?: string[]; ugcRight?: number }) {
+      const botAtCall = client;
+      if (!botAtCall) return Promise.reject(new Error('QQ 桥未启动或已停止，发不了说说'));
+      const params: Loose = { content, ugc_right: options?.ugcRight ?? 1 };
+      if (options?.images?.length) params.images = options.images;
+      const raw = await withTimeout(
+        (botAtCall as Loose).request('send_qzone_msg', params),
+        SEND_TIMEOUT_MS,
+        'QQ发说说',
+      ) as Loose;
+      const data = raw?.data ?? raw;
+      return { tid: String(data?.tid ?? ''), time: Number(data?.time ?? 0) };
+    },
+
     async sendCustomFace(emojiId: Loose, target: { groupId?: Loose; userId?: Loose }) {
       const botAtCall = client;
       if (!botAtCall) {

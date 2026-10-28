@@ -127,7 +127,9 @@ export type QqPart =
   | { type: 'image'; file: string }
   | { type: 'face'; id: string }
   /** 账号收藏表情。**不是消息段**，走 send_custom_face 单发一条。 */
-  | { type: 'sticker'; emojiId: string };
+  | { type: 'sticker'; emojiId: string }
+  /** 发一条 QQ 空间说说。也**不是消息段**，单独一条，不跟着回复走。 */
+  | { type: 'qzone'; content: string; images?: string[] };
 
 export interface QqTransport {
   start(): Promise<void>;
@@ -135,6 +137,8 @@ export interface QqTransport {
   getState(): string;
   sendGroup(groupId: string, parts: string | QqPart[]): Promise<{ messageId: string }>;
   sendPrivate(userId: string, parts: string | QqPart[]): Promise<{ messageId: string }>;
+  /** 发一条 QQ 空间说说；测试桩可以不实现。 */
+  publishQzone?(content: string, options?: { images?: string[]; ugcRight?: number }): Promise<{ tid: string; time: number }>;
   /** 发账号收藏表情；测试桩可以不实现。 */
   sendCustomFace?(
     emojiId: string,
@@ -150,7 +154,7 @@ export interface QqTransport {
  * 方括号叠两层的写法不常见，不会误伤 markdown 里的 `[文字](链接)`。
  */
 export function buildReplyParts(text: string): string | QqPart[] {
-  const tag = /\[\[(img|face|at|sticker):([^\[\]]+)\]\]/g;
+  const tag = /\[\[(img|face|at|sticker|qzone):([^\[\]]+)\]\]/g;
   const parts: QqPart[] = [];
   let last = 0;
   for (let m = tag.exec(text); m; m = tag.exec(text)) {
@@ -159,6 +163,7 @@ export function buildReplyParts(text: string): string | QqPart[] {
     if (m[1] === 'img') parts.push({ type: 'image', file: value });
     else if (m[1] === 'face') parts.push({ type: 'face', id: value });
     else if (m[1] === 'sticker') parts.push({ type: 'sticker', emojiId: value });
+    else if (m[1] === 'qzone') parts.push({ type: 'qzone', content: value });
     else parts.push({ type: 'at', qq: value });
     last = m.index + m[0].length;
   }
@@ -496,7 +501,13 @@ export function createQqNativeModule(deps: {
       const stickers = Array.isArray(replyParts)
         ? replyParts.filter((part): part is { type: 'sticker'; emojiId: string } => part.type === 'sticker')
         : [];
-      const rest = Array.isArray(replyParts) ? replyParts.filter((part) => part.type !== 'sticker') : replyParts;
+      // 空间说说也一样：一句话里带 [[qzone: ...]] 就顺手发出去，不占聊天那条。
+      const qzones = Array.isArray(replyParts)
+        ? replyParts.filter((part): part is { type: 'qzone'; content: string; images?: string[] } => part.type === 'qzone')
+        : [];
+      const rest = Array.isArray(replyParts)
+        ? replyParts.filter((part) => part.type !== 'sticker' && part.type !== 'qzone')
+        : replyParts;
       const hasRest = typeof rest === 'string' ? rest.trim().length > 0 : rest.length > 0;
       if (hasRest) {
         // 中间有空行就拆成几条发 —— 2026-10-28 00:51 他定的规矩：长回答分两段，
@@ -513,6 +524,14 @@ export function createQqNativeModule(deps: {
       for (const sticker of stickers) {
         const target = isGroup ? { groupId: conversationId } : { userId: conversationId };
         await client?.sendCustomFace?.(sticker.emojiId, target);
+      }
+      for (const one of qzones) {
+        try {
+          const out = await client?.publishQzone?.(one.content, { images: one.images });
+          if (out?.tid) stats.lastError = null;
+        } catch (error) {
+          deps.logger.warn('QQ 空间那条没发出去: ' + (error instanceof Error ? error.message : String(error)));
+        }
       }
       stats.sent += 1;
     } catch (error) {
