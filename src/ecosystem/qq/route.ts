@@ -40,7 +40,7 @@ function allowed(req: IncomingMessage, allowedHosts: readonly string[]): boolean
  *
  * `mutedUntil` 是 ISO 时间（`null` = 立刻恢复）—— 只停嘴不停耳，到点自己醒。
  */
-export interface NativePatch { autoReply?: boolean; bridge?: { port?: number }; mutedUntil?: string | null; startSnowluma?: true }
+export interface NativePatch { autoReply?: boolean; bridge?: { port?: number }; mutedUntil?: string | null; startSnowluma?: true; allowPrivate?: string[]; allowGroups?: string[] }
 type SetNative = (patch: NativePatch) => unknown;
 
 async function write(doors: ConsoleDoors | undefined, path: string, body: Record<string, unknown> | undefined, setNative?: SetNative): Promise<JsonResult | undefined> {
@@ -49,6 +49,21 @@ async function write(doors: ConsoleDoors | undefined, path: string, body: Record
       if (!setNative) return bad('原生通道没有接上');
       const patch: NativePatch = {};
       if (typeof body?.autoReply === 'boolean') patch.autoReply = body.autoReply;
+      // 白名单：谁的话能进来。传数组就整组换掉，空数组表示一个都不收。
+      for (const key of ['allowPrivate', 'allowGroups'] as const) {
+        const raw = body?.[key];
+        if (raw === undefined) continue;
+        if (!Array.isArray(raw)) return bad(key + ' 要给一个数组');
+        const list: string[] = [];
+        for (const one of raw) {
+          if (typeof one !== 'string' && typeof one !== 'number') return bad(key + ' 里只能是 QQ 号（字符串或数字）');
+          const id = String(one).trim();
+          if (id === '') continue;
+          if (!/^[0-9]+$/.test(id)) return bad(key + ' 里有个不是号码：' + id);
+          list.push(id);
+        }
+        patch[key] = list;
+      }
       // 静默：给一个时间点，到点前只收不回；给 null 或空串就是立刻恢复。
       if (body?.mutedUntil !== undefined) {
         const raw = body.mutedUntil;
@@ -67,8 +82,8 @@ async function write(doors: ConsoleDoors | undefined, path: string, body: Record
       }
       // 手动拉起 SnowLuma：只认 true，别的一概不猜。
       if (body?.startSnowluma === true) patch.startSnowluma = true;
-      if (patch.autoReply === undefined && patch.bridge === undefined && patch.mutedUntil === undefined && patch.startSnowluma === undefined) {
-        return bad('autoReply、bridge、mutedUntil、startSnowluma 至少要给一个');
+      if (patch.autoReply === undefined && patch.bridge === undefined && patch.mutedUntil === undefined && patch.startSnowluma === undefined && patch.allowPrivate === undefined && patch.allowGroups === undefined) {
+        return bad('autoReply、bridge、mutedUntil、startSnowluma、allowPrivate、allowGroups 至少要给一个');
       }
       return ok(setNative(patch));
     }

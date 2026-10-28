@@ -83,6 +83,9 @@ export interface QqNativeStatus {
   url: string;
   allowPrivate: number;
   allowGroups: number;
+  /** 名单本身，面板要拿它填输入框。 */
+  allowPrivateIds: string[];
+  allowGroupsIds: string[];
   autoReply: boolean;
   conversations: number;
   answering: number;
@@ -276,14 +279,14 @@ export function createQqNativeModule(deps: {
   }
 
   // 拨过的开关写在 stateFile 里，重载不丢；配置里那个是出厂默认。
-  let overrides: { autoReply?: boolean; bridge?: { port?: number }; mutedUntil?: string | null } = {};
+  let overrides: { autoReply?: boolean; bridge?: { port?: number }; mutedUntil?: string | null; allowPrivate?: string[]; allowGroups?: string[] } = {};
   let overridesRead = false;
   function readOverrides(): void {
     if (overridesRead) return;
     overridesRead = true;
     const file = deps.stateFile;
     if (!file) return;
-    try { overrides = JSON.parse(readFileSync(file, 'utf8')) as { autoReply?: boolean; bridge?: { port?: number }; mutedUntil?: string | null }; } catch { overrides = {}; }
+    try { overrides = JSON.parse(readFileSync(file, 'utf8')) as typeof overrides; } catch { overrides = {}; }
   }
   function writeOverrides(): void {
     const file = deps.stateFile;
@@ -299,6 +302,8 @@ export function createQqNativeModule(deps: {
       ...base,
       ...(overrides.autoReply === undefined ? {} : { autoReply: overrides.autoReply }),
       ...(overrides.mutedUntil === undefined ? {} : { mutedUntil: overrides.mutedUntil ?? '' }),
+      ...(overrides.allowPrivate === undefined ? {} : { allowPrivate: overrides.allowPrivate }),
+      ...(overrides.allowGroups === undefined ? {} : { allowGroups: overrides.allowGroups }),
       bridge,
     };
   };
@@ -602,6 +607,8 @@ export function createQqNativeModule(deps: {
         url: config.wsUrl,
         allowPrivate: config.allowPrivate.length,
         allowGroups: config.allowGroups.length,
+        allowPrivateIds: [...config.allowPrivate],
+        allowGroupsIds: [...config.allowGroups],
         autoReply: config.autoReply,
         bindHomeSession: config.bindHomeSession,
         bridge: nativeBridge?.status() ?? null,
@@ -635,6 +642,19 @@ export function createQqNativeModule(deps: {
     setMuted(until: string | null) {
       readOverrides();
       overrides.mutedUntil = until && until.trim() ? until.trim() : null;
+      writeOverrides();
+      return this.status();
+    },
+    /**
+     * 面板上改白名单：谁的话能进来。给数组就整组换掉，空数组就是不收任何人的。
+     *
+     * 跟别的开关一样存在 stateFile 里 —— 重载不丢，但要跟配置文件分开看：
+     * 面板上拨过就以面板为准了，配置文件里那份就成了「没拨过时的默认」。
+     */
+    setAllow(patch: { allowPrivate?: string[]; allowGroups?: string[] }) {
+      readOverrides();
+      if (patch.allowPrivate !== undefined) overrides.allowPrivate = patch.allowPrivate;
+      if (patch.allowGroups !== undefined) overrides.allowGroups = patch.allowGroups;
       writeOverrides();
       return this.status();
     },

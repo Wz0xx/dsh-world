@@ -156,6 +156,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         if (!qqNative) return null;
         if (patch.bridge) return qqNative.setBridge(patch.bridge);
         if (patch.mutedUntil !== undefined) return qqNative.setMuted(patch.mutedUntil);
+        if (patch.allowPrivate !== undefined || patch.allowGroups !== undefined) {
+          return qqNative.setAllow({ allowPrivate: patch.allowPrivate, allowGroups: patch.allowGroups });
+        }
         // 只在这一步、只因为有人按了按钮，才去叫醒它。
         if (patch.startSnowluma) return startSnowluma(config.qqNative?.snowlumaHome || discoverSnowlumaHome(''));
         return qqNative.setAutoReply(patch.autoReply === true);

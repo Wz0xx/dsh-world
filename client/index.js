@@ -394,6 +394,31 @@ window.__ModuleLoader__.load({
           if (props.onSaved) props.onSaved()
         }, function (e) { setMsg('失败：' + ((e && e.message) || e)) }).then(function () { setBusy(false) })
       }
+      // 白名单：谁的话能进来。留空 = 一个都不收（跟「全放行」不是一回事，别搞混）。
+      var apRaw = useState(''), apInit = apRaw[0], setApInit = apRaw[1]
+      var agRaw = useState(''), agInit = agRaw[0], setAgInit = agRaw[1]
+      var apState = useState(''), allowPrivate = apState[0], setAllowPrivate = apState[1]
+      var agState = useState(''), allowGroups = agState[0], setAllowGroups = agState[1]
+      var apMsg = useState(''), allowMsg = apMsg[0], setAllowMsg = apMsg[1]
+      // 第一次拿到 props.native 时把名单填进输入框；之后不再覆盖用户正在改的字。
+      var ids = props.native ? [String((props.native.allowPrivateIds || []).join(',')), String((props.native.allowGroupsIds || []).join(','))] : ['', '']
+      if (apInit !== ids[0] + '|' + ids[1]) {
+        setApInit(ids[0] + '|' + ids[1])
+        setAllowPrivate(ids[0]); setAllowGroups(ids[1])
+      }
+      function splitIds(text) {
+        return String(text || '').split(/[\s,，、;；]+/).map(function (x) { return x.trim() }).filter(function (x) { return x !== '' })
+      }
+      function saveAllow() {
+        var p = splitIds(allowPrivate), g = splitIds(allowGroups)
+        for (var i = 0; i < p.length; i++) if (!/^[0-9]+$/.test(p[i])) { setAllowMsg('私聊里有不是号码的：' + p[i]); return }
+        for (var j = 0; j < g.length; j++) if (!/^[0-9]+$/.test(g[j])) { setAllowMsg('群号里有不是号码的：' + g[j]); return }
+        setBusy(true); setAllowMsg('')
+        qqPost('native', { allowPrivate: p, allowGroups: g }).then(function () {
+          setAllowMsg(p.length || g.length ? '存好了：私聊 ' + p.length + ' 个、群 ' + g.length + ' 个' : '存好了：现在谁的话都不收了')
+          if (props.onSaved) props.onSaved()
+        }, function (e) { setAllowMsg('失败：' + ((e && e.message) || e)) }).then(function () { setBusy(false) })
+      }
       function whenText(iso) {
         if (!iso) return ''
         var d = new Date(iso)
@@ -440,6 +465,22 @@ window.__ModuleLoader__.load({
               } }, '静默到这个点'),
             muted ? h('button', { key: 'r', className: 'dw-btn', disabled: busy,
               onClick: function () { setMute(null) } }, '立刻恢复') : null,
+          ])
+        })(props.native),
+        (function (n) {
+          if (!n) return null
+          return h('div', { key: 'na', className: 'dw-setting', style: { flexWrap: 'wrap', gap: 6 } }, [
+            h('span', { key: 'l', className: 'dw-muted' }, '接谁的话：'),
+            h('input', { key: 'p', type: 'text', disabled: busy, value: allowPrivate, placeholder: '私聊 QQ 号',
+              style: { width: 130, marginLeft: 4 },
+              onInput: function (e) { setAllowPrivate(e.target.value); setAllowMsg('') } }),
+            h('input', { key: 'g', type: 'text', disabled: busy, value: allowGroups, placeholder: '群号',
+              style: { width: 110, marginLeft: 4 },
+              onInput: function (e) { setAllowGroups(e.target.value); setAllowMsg('') } }),
+            h('button', { key: 'b', className: 'dw-btn', disabled: busy, onClick: saveAllow }, '存'),
+            allowMsg ? h('span', { key: 'm', className: allowMsg.indexOf('失败') >= 0 ? 'dw-bad' : 'dw-muted' }, allowMsg) : null,
+            h('div', { key: 'h', className: 'dw-muted', style: { fontSize: 12, width: '100%' } },
+              '多个用逗号隔开；留空就是谁都进不来。改完不用重启。'),
           ])
         })(props.native),
         (function (n) {
