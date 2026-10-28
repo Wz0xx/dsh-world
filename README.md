@@ -41,7 +41,7 @@ DSH 设置里的「世界控制台」：
 - **人设**：分层写她是谁：名字、她是谁、性格、说话方式、愿景、补充，旁边实时预览她读到的样子。
 - **世界提示词**：你想对她说的话，以及她的世界的说明。
 - **概览与记录**：她此刻在做什么、下个闹钟、近期记忆有多少轮、今天花了多少；还有活动记录、日记和压缩记录。
-- **接入开关**：配置里启用了微信（`wechat: true`）或 QQ（`qqNative.enabled: true`）后，概览里有一张「接入」卡片，各有一个开关，立即生效、无需重启，状态记在 `world.json`。微信开着才注册 `wechat_chats`、`wechat_history`、`wechat_send`、`wechat_delivery` 并拉起适配器（配了 `wechatAdapter` 时），关掉就撤掉；QQ 开着才连上那条 OneBot 通道、显示 QQ 卡，关掉就断开这条连接、把卡收起来。默认都是开。
+- **接入开关**：配置里启用了微信（`wechat: true`）或 QQ（`qqNative.enabled: true`）后，概览里有一张「接入」卡片，各有一个开关，立即生效、无需重启，状态记在 `world.json`。微信开着才注册 `wechat_chats`、`wechat_history`、`wechat_send`、`wechat_delivery` 并拉起适配器（配了 `wechatAdapter` 时），关掉就撤掉；QQ 开着才连上那条 OneBot 通道、显示 QQ 卡，关掉就断开这条连接、把卡收起来。微信默认开；**QQ 默认关**——它依赖 `@snowluma/sdk`（声明在 `optionalDependencies` 里），不开就不加载那套代码，没装 SDK 也不影响插件本身。
 - **归档范围**：默认 `workspace`，归档家所在工作区的普通会话，包含独立微信群会话；`home` 仅当前家会话。保存范围后提示重启，重启前沿用原范围。启动时分页回扫所选范围内的会话日志，按消息实际时间重选最近配置轮数，下次请求前替换旧记忆块；没有时间过期。旧归档保留，范围外记录不再注入。旧配置 `world` 迁为 `workspace`。
 
 > **人设留空时的默认行为**：控制台人设全部留空时，默认沿用宿主或当前预设在系统提示词中配置的人设，插件不额外注入自定义人设。控制台不会自动读取并回填系统人设，因此界面留空不代表她原有的人设丢失。
@@ -96,7 +96,7 @@ dsh-world 开放了一个本地的「桥」：桌宠之类的程序可以把你�
 
 QQ 走插件自己那条原生通道：直接连 SnowLuma 开出来的 OneBot WebSocket，收文本、发文本，中途没有别的进程。代码在 [`src/ecosystem/qq-native/`](src/ecosystem/qq-native/index.ts)。
 
-在 profile 的 `cordis.patch.yml` 里打开 `qqNative`、填上 WS 地址与 token、加上白名单之后，控制台里会多一张 QQ 卡片：连着哪个地址、收过几个会话、发过几条、挡下几条、会自己回还是只看不回、群规则，一眼看到；卡上还能直接拨「会自己回话 / 只看不回」和主动开口的两个开关，也能刷新、打开 SnowLuma 控制台。没配 `qqNative.enabled` 的时候这一块整个不出现，行为跟以前一样。
+在 profile 的 `cordis.patch.yml` 里打开 `qqNative`（`enabled: true` 只是允许它存在）、再到控制台「概览 → 接入」把 QQ 拨开、填上 WS 地址与 token、加上白名单之后，控制台里会多一张 QQ 卡片：连着哪个地址、收过几个会话、发过几条、挡下几条、会自己回还是只看不回、群规则，一眼看到；卡上还能直接拨「会自己回话 / 只看不回」和主动开口的两个开关，也能刷新、打开 SnowLuma 控制台。没配 `qqNative.enabled` 的时候这一块整个不出现，行为跟以前一样。
 
 参数不对不会崩，只会连不上：卡上会把原因写在 `lastError` 里（比如 `WS 错误: Unexpected server response: 401`，说明填的是 HTTP 那份 token，该换成 WebSocket 那份）。QQ 卡只在通道启用、世界已经开始时出现。
 

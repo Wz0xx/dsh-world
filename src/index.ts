@@ -61,6 +61,8 @@ export const Config = z.object({
     allowGroups: z.array(z.string()).default([]),
     autoReply: z.boolean().default(true),
     contextMessages: z.number().default(6),
+    /** 同一个人这几秒内说的话攒成一条问（0 = 一条一问）。 */
+    batchQuietMs: z.number().default(10000),
     // 群里什么时候接话。量出来的事实是：不做这个判断的话，群里每句都会让她跑完一轮、还往群里冒一条
     // （她自己会在话里写「这句不接」，但那句话本身也发到群里了）。默认只接被叫到的。
     groupTrigger: z.union([z.const('mention').description('只接被叫到的（被 @ / 被引用她的话 / 命中关键词）'), z.const('all').description('每句都接')]).default('mention'),

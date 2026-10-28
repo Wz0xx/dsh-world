@@ -21,13 +21,25 @@ export function patchSnowluma(packageDir) {
       if (patched !== source) changes.push([file, patched]);
     }
   }
-  visit(join(packageDir, 'dist'));
+  const dist = join(packageDir, 'dist');
+  if (!existsSync(dist)) return 0;
+  visit(dist);
   for (const [file, patched] of changes) writeFileSync(file, patched, 'utf8');
   return changes.length;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const require = createRequire(import.meta.url);
-  const count = patchSnowluma(dirname(require.resolve('@snowluma/sdk/package.json')));
-  process.stdout.write(`SnowLuma SDK ESM imports ready (${count} files updated).\n`);
+  // @snowluma/sdk 是可选依赖：没装、装了一半、或者被 --omit=optional 跳过，都不该让整场
+  // npm install 失败 —— 它只在 QQ 那条通道被拨开时才用得上。postinstall 里抛错会把插件
+  // 本身一起拖死，那正是 2026-10-28「0.6.0 之后变成强制依赖、插件死机」的根。
+  let manifest;
+  try {
+    manifest = require.resolve('@snowluma/sdk/package.json');
+  } catch {
+    process.stdout.write('@snowluma/sdk 不在，跳过 ESM 修补（可选依赖，QQ 通道拨开前用不到）。');
+    process.exit(0);
+  }
+  const count = patchSnowluma(dirname(manifest));
+  process.stdout.write('SnowLuma SDK ESM imports ready (' + count + ' files updated).');
 }

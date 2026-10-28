@@ -62,7 +62,8 @@ test('混合段：未知段不丢、reply id 在 segments 里、mface 有可读�
   assert.match(msg.text, /\[动画表情\]|\[mface/, 'mface 段必须可读或落到 default 分支留占位');
   assert.match(msg.text, /^\[引用消息\]/, 'reply 段转成引用占位');
   assert.match(msg.text, /@1000000001/);
-  assert.match(msg.text, /\[图片\]/);
+  // 2026-10-28：入站图片改成带 file 的占位（不然图就丢了），断言跟着改。
+  assert.match(msg.text, /\[图片 file=[^\]]+\]/);
   assert.match(msg.text, /\[表情14\]/);
 });
 

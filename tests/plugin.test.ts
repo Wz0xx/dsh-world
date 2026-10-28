@@ -537,7 +537,7 @@ test('a module the config does not provide cannot be switched on from the consol
   await until(async () => routes.length === 2, 'console');
   const result = await routeCall(routes, '/dsh-world', '/dsh-world/console/modules', { 'x-dsh-world': '1', 'content-type': 'application/json' }, JSON.stringify({ wechat: true }));
   assert.equal(result.status, 400);
-  assert.deepEqual((await consoleGet(routes, '/dsh-world/console/snapshot')).modules, { wechat: { available: false, enabled: true, running: false }, qq: { available: false, enabled: true, running: false } });
+  assert.deepEqual((await consoleGet(routes, '/dsh-world/console/snapshot')).modules, { wechat: { available: false, enabled: true, running: false }, qq: { available: false, enabled: false, running: false } });
 });
 
 test('the QQ off switch survives world restart and plugin reload; re-enabling opens one connection', async t => {
@@ -554,6 +554,8 @@ test('the QQ off switch survives world restart and plugin reload; re-enabling op
   let plugin = ctx.plugin(worldPlugin, options); cleanup.push(() => plugin.dispose()); await plugin.await();
   await until(async () => routes.length === 2, 'console');
   await consolePost(routes, '/dsh-world/console/start'); await firstWakeDone(ctx, root);
+  // 0.6.1 起 QQ 默认关：配置里开了 qqNative 也只是「允许它存在」，还得从接入卡片拨开。
+  await consolePost(routes, '/dsh-world/console/modules', { qq: true });
   await until(async () => connections === 1, 'QQ connected');
   await consolePost(routes, '/dsh-world/console/modules', { qq: false });
   assert.equal(JSON.parse(await readFile(join(root, 'worlds/fish/world.json'), 'utf8')).qqEnabled, false);

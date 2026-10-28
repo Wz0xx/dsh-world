@@ -77,17 +77,19 @@ test('wechat settings validate their range and keep omitted fields', async () =>
   for (const body of [{}, { contextMessages: 0 }, { contextMessages: 21 }, { contextMessages: 2.5 }, { bufferSeconds: -1 }, { bufferSeconds: 31 }, { bufferSeconds: '3' }]) assert.equal((await post(body)).status, 400, JSON.stringify(body));
   assert.deepEqual(calls, ['wechat:{"context":12,"bufferSeconds":1.5}', 'wechat:{"context":null}']);
 });
-test('the module switches default to on, only an off switch is written, and it survives a restart', t => {
+test('WeChat defaults to on, QQ defaults to off, and both survive a restart', t => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-world-modules-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
   const power = createWorldSwitch(dir);
-  assert.deepEqual([power.wechatEnabled(), power.qqEnabled()], [true, true]);
+  // QQ 是后装的那条通道：默认关，拨开才去加载它的代码（@snowluma/sdk）。
+  assert.deepEqual([power.wechatEnabled(), power.qqEnabled()], [true, false]);
   power.setModules({ wechat: false });
-  assert.deepEqual([createWorldSwitch(dir).wechatEnabled(), createWorldSwitch(dir).qqEnabled()], [false, true]);
-  power.setModules({ qq: false });
-  assert.deepEqual([createWorldSwitch(dir).wechatEnabled(), createWorldSwitch(dir).qqEnabled()], [false, false], 'a switch left out keeps its value');
-  power.setModules({ wechat: true, qq: true });
+  assert.deepEqual([createWorldSwitch(dir).wechatEnabled(), createWorldSwitch(dir).qqEnabled()], [false, false]);
+  power.setModules({ qq: true });
+  assert.deepEqual([createWorldSwitch(dir).wechatEnabled(), createWorldSwitch(dir).qqEnabled()], [false, true], '拨开 QQ 只动 qqEnabled，不碰 wechatEnabled');
+  power.setModules({ wechat: true });
   const stored = JSON.parse(readFileSync(join(dir, 'world.json'), 'utf8'));
-  assert.equal('wechatEnabled' in stored || 'qqEnabled' in stored, false);
+  assert.equal(stored.qqEnabled, true, 'QQ 是默认关闭的，所以连「开」也得写下来');
+  assert.equal('wechatEnabled' in stored, false, 'WeChat 默认开，开着就不写');
 });
 test('wechat settings default to 8 and 3, persist, and return to default', t => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-world-wechat-')); t.after(() => rmSync(dir, { recursive: true, force: true }));

@@ -27,7 +27,7 @@ export function createWorldSwitch(worldDir: string, configuredScope: MemoryArchi
     ...(validWechatContext(stored?.wechatContext) ? { wechatContext: stored.wechatContext } : {}),
     ...(validWechatBuffer(stored?.wechatBufferSeconds) ? { wechatBufferSeconds: stored.wechatBufferSeconds } : {}),
     ...(stored?.wechatEnabled === false ? { wechatEnabled: false } : {}),
-    ...(stored?.qqEnabled === false ? { qqEnabled: false } : {}),
+    ...(typeof stored?.qqEnabled === 'boolean' ? { qqEnabled: stored.qqEnabled } : {}),
   };
   const activeScope = settings.archiveScope ?? configuredScope;
   function save(next: WorldSettings): void {
@@ -58,11 +58,12 @@ export function createWorldSwitch(worldDir: string, configuredScope: MemoryArchi
     },
     /** The console's switches for the WeChat and QQ modules; on unless turned off, and only an off switch is written out. */
     wechatEnabled: () => settings.wechatEnabled !== false,
-    qqEnabled: () => settings.qqEnabled !== false,
+    /** QQ 是后装的那条通道：默认关。只有控制台「接入」卡片把它拨开，才会去加载它的代码。 */
+    qqEnabled: () => settings.qqEnabled === true,
     setModules(next: { wechat?: boolean; qq?: boolean }): void {
       const { wechatEnabled, qqEnabled, ...rest } = settings;
-      const wechat = next.wechat ?? wechatEnabled !== false, qq = next.qq ?? qqEnabled !== false;
-      save({ ...rest, ...(wechat ? {} : { wechatEnabled: false }), ...(qq ? {} : { qqEnabled: false }) });
+      const wechat = next.wechat ?? wechatEnabled !== false, qq = next.qq ?? qqEnabled === true;
+      save({ ...rest, ...(wechat ? {} : { wechatEnabled: false }), qqEnabled: qq });
     },
     /** Read by the WeChat adapter on its next poll; a batch already waiting keeps the value it started with. */
     wechatContext: () => settings.wechatContext ?? DEFAULT_WECHAT_CONTEXT,

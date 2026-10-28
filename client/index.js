@@ -629,6 +629,14 @@ window.__ModuleLoader__.load({
 
 
     var TABS = [['overview', '概览'], ['persona', '人设'], ['prompt', '世界提示词'], ['records', '记录'], ['qq', 'QQ']]
+    /** QQ 标签页空着的时候，说清是配置没开、还是「接入」卡片里关着、还是开了但没连上。 */
+    function qqWhy(snap) {
+      var qq = (snap && snap.modules && snap.modules.qq) || null
+      if (!qq || !qq.available) return 'QQ 这条通道在配置里就没开（qqNative.enabled）。'
+      if (!qq.enabled) return 'QQ 关着。去「概览 → 接入」那张卡把 QQ 拨开 —— 拨开之后才会加载它的代码、才连得上。'
+      return 'QQ 开着但没跑起来 —— 看概览顶上那条错误。'
+    }
+
     /** 一份快照的画面；life 为 null（停着，或生活线没能启动）或缺了哪一块都不会崩。 */
     function View(props) {
       var snap = props.snap, error = props.error
@@ -657,7 +665,8 @@ window.__ModuleLoader__.load({
         tab === 'persona' ? h(PersonaEditor, { onSaved: props.refresh }) : null,
         tab === 'prompt' ? h(PromptEditor) : null,
         tab === 'records' ? h(Records, { snap: snap, tick: props.tick }) : null,
-        tab === 'qq' ? (snap.native ? h(Qq, { native: snap.native, onSaved: props.refresh, onNeedPassword: setPanel }) : h('div', { className: 'dw-pane' }, h(Card, null, h('div', { className: 'dw-muted' }, 'QQ 通道没开（配置里 qqNative.enabled）')))) : null,
+        tab === 'qq' ? (snap.native ? h(Qq, { native: snap.native, onSaved: props.refresh, onNeedPassword: setPanel }) : h('div', { className: 'dw-pane' }, h(Card, null,
+            h('div', { className: 'dw-muted' }, qqWhy(snap))))) : null,
           panel ? h(Panel, { kind: panel, onClose: function () { setPanel(null) } }) : null)
     }
 

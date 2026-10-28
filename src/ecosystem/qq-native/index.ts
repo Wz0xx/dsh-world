@@ -75,6 +75,8 @@ export interface QqNativeConfig {
    * 跟 autoReply 的区别是它会自己醒 —— autoReply 关了要人再拨回来，这个到点就恢复。
    */
   mutedUntil: string;
+  /** 合批窗口（毫秒）：同一个人这几秒内说的话攒成一条问。0 = 一条一问（测试用）。 */
+  batchQuietMs?: number;
 }
 
 export interface QqNativeStatus {
@@ -203,7 +205,8 @@ export function createQqNativeModule(deps: {
   const seen = new Set<string>();
   const contexts = new Map<string, ChannelContextMessage[]>();
   const answering = new Set<string>();
-  const BATCH_QUIET_MS = 10_000;
+  /** 合批窗口。真机 10 秒，测试里调 0 就是一条一问。 */
+  const batchQuietMs = (): number => deps.config().batchQuietMs ?? 10_000;
   const BATCH_MAX_MS = 30_000;
   const batches = new Map<string, { identity: SpeakerIdentity; entries: { text: string; who: string }[]; timer: ReturnType<typeof setTimeout> }>();
   const batchOpenedAt = new Map<string, number>();
@@ -450,7 +453,7 @@ export function createQqNativeModule(deps: {
     }
     const batch = batches.get(key)!;
     const openedAt = batchOpenedAt.get(key) ?? now;
-    const wait = Math.max(0, Math.min(BATCH_QUIET_MS, BATCH_MAX_MS - (now - openedAt)));
+    const wait = Math.max(0, Math.min(batchQuietMs(), BATCH_MAX_MS - (now - openedAt)));
     clearTimeout(batch.timer);
     batch.timer = setTimeout(() => { void flushBatch(key); }, wait);
     answering.add(key);
@@ -688,7 +691,11 @@ export function createQqNativeModule(deps: {
       if (stopped) return;
       const config = settings();
       if (!config.enabled) return;
-      if (!outboxTimer) outboxTimer = setInterval(() => { void flushOutbox(); }, 3000);
+      if (!outboxTimer) {
+        outboxTimer = setInterval(() => { void flushOutbox(); }, 3000);
+        // 不收尾的定时器会把进程钉住：测试跑完 node --test 不退，CI 只能等它超时。
+        outboxTimer.unref?.();
+      }
       const bridge = (deps.transport ?? createBridge)({
         wsUrl: config.wsUrl,
         ...(config.accessToken ? { accessToken: config.accessToken } : {}),
@@ -727,6 +734,7 @@ export function createQqNativeModule(deps: {
       supervisor.stop();
       home.stop();
       nativeBridge?.stop(); nativeBridge = undefined;
+      if (outboxTimer) { clearInterval(outboxTimer); outboxTimer = undefined; }
       void client?.stop();
       client = undefined;
       contexts.clear();

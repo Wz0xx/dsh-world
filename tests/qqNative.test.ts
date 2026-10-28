@@ -55,6 +55,7 @@ const configOf = (over: Partial<QqNativeConfig> = {}): QqNativeConfig => ({
   snowlumaHome: '',
   supervise: false,
   mutedUntil: '',
+  batchQuietMs: 0,
   allowGroups: ['681528723'],
   autoReply: true,
   contextMessages: 3,
