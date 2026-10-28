@@ -533,11 +533,13 @@ export function createQqNativeModule(deps: {
    * 说完就亲手推一份给主人，按空行分段。
    */
   function watchOwnTurns(): void {
-    let pending: { sessionId: string; text: string } | null = null;
+    let pending: { sessionId: string; text: string; fromUs: boolean } | null = null;
     deps.ctx.on('session/event', (session, event) => {
       const data = event.data as { source?: { kind?: string }; message?: { content?: Array<{ type: string; text?: string }> }; turn?: number };
       if (event.type === 'user/message') {
-        pending = { sessionId: session.id, text: '' };
+        // 这一轮是不是 QQ 那边问进来的：answering 非空说明 deliver 正在跑，
+        // 它自己会把回答发出去，这里不必再推（推了就是两遍）。
+        pending = { sessionId: session.id, text: '', fromUs: answering.size > 0 };
         return;
       }
       if (!pending || session.id !== pending.sessionId) return;
@@ -549,8 +551,11 @@ export function createQqNativeModule(deps: {
       }
       if (event.type !== 'turn/end') return;
       const said = pending.text.trim();
+      const fromUs = pending.fromUs;
       pending = null;
       if (!said) return;
+      // deliver 那条路已经把这一轮发出去了。
+      if (fromUs) return;
       const config = settings();
       const owner = config.ownerQQ || config.allowPrivate[0];
       if (!owner) return;
