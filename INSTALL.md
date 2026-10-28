@@ -33,12 +33,16 @@ npm ci        # 仓库带 package-lock.json，能装全 devDependencies
 npm pack      # 会先 typecheck + build，产出 dsh-world-<版本>.tgz
 ```
 
-拿到 `dsh-world-0.5.2.tgz` 的**绝对路径**，然后：
+安装会自动执行 `scripts/patch-snowluma.mjs`，为固定的 SnowLuma SDK 1.x 补齐相对 ESM 导入的 `.js` 后缀，保留 Node 22 支持；不需要升级 DSH 的 Node。QQ 只在启用时加载，加载失败只显示 QQ 自身故障。
+
+拿到 `dsh-world-0.6.0.tgz` 的**绝对路径**，然后：
 
 ```bash
 cd <DSH_HOME>/profiles/<你的 profile>
 node <pnpm.cjs 路径> add <tgz 的绝对路径>
 ```
+
+如果包管理器阻止了安装脚本（或使用了 `--ignore-scripts`），在 profile 目录执行 `node node_modules/dsh-world/scripts/patch-snowluma.mjs`，重新启动 DSH 后再开启 QQ。此命令只修补该 SDK 的相对导入，可重复执行，不改世界数据。
 
 **不要用 `link:` 指向 clone 下来的目录。** 那样会加载项目自带的一份 Cordis，和 DSH 自己的打架。README 里也写了这句，别忽略。
 

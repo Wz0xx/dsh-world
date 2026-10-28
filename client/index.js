@@ -529,7 +529,7 @@ window.__ModuleLoader__.load({
           h('div', { className: 'dw-muted', style: { flexBasis: '100%' } }, info.enabled ? onText : offText))
       }
       return h(Card, { title: '接入', delay: 270 },
-        row('wechat', '微信', m.wechat, '已注册 wechat_chats、wechat_send、wechat_delivery，并随之启动适配器。关闭会撤掉它们并停掉适配器。', '工具未注册，适配器已停。开启后立即注册，无需重启。'),
+        row('wechat', '微信', m.wechat, '已注册 wechat_chats、wechat_history、wechat_send、wechat_delivery，可先看群聊再发言，并随之启动适配器。关闭会撤掉它们并停掉适配器。', '工具未注册，适配器已停。开启后立即注册，无需重启。'),
         row('qq', 'QQ', m.qq, '插件自己直连 OneBot：状态和两个开关在 QQ 那张卡上。关闭就断开这条通道。', '插件不跑 QQ 通道，QQ 卡隐藏。开启后立即恢复。'),
         msg ? h('div', { className: 'dw-bad' }, msg) : null)
     }

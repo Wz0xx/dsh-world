@@ -84,7 +84,7 @@ class AdapterTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             store = MessageStore(Path(directory) / 'state.sqlite')
             with self.assertRaises(RuntimeError):
-                watch(dict(chats=[dict(id='group')], selfId='wxid_bot', moduleFile='unused'), Database(), store, lambda *_: None, ask, poll=lambda _: None)
+                watch(dict(chats=[dict(id='group')], selfId='wxid_bot', moduleFile='unused'), Database(), store, lambda *_: None, ask, poll=lambda _: {})
             self.assertEqual(calls, ['刚到的消息'])
             store.close()
 

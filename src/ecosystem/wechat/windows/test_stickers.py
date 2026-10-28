@@ -24,6 +24,13 @@ class Opener:
 
 
 class StickerTest(unittest.TestCase):
+    def test_self_media_is_ignored_before_reading_the_image_or_sticker(self):
+        config = dict(selfId='bot')
+        chat = dict(id='owner', name='伙伴')
+        for kind in ('图片', '动画表情'):
+            row = dict(local_id=1, shard='m.db', sort_seq=11, create_time=100, type=kind, sender_username='bot', content='self echo')
+            self.assertIsNone(adapter.incomingMessage(object(), chat, row, config))
+
     def test_parse_unescapes_the_address(self):
         self.assertEqual(parseSticker(xml()), (MD5, 'http://vweixinf.tc.qq.com/a?b=1&c=2'))
 

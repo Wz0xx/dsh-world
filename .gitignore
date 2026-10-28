@@ -3,6 +3,7 @@ lib/
 .host/
 .superpowers/
 *.tgz
+/artifacts/
 
 # Design notes and working logs stay local (personal paths and names).
 docs/

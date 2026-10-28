@@ -106,6 +106,7 @@ import {
   chain,
   parseSegments,
 } from '@snowluma/sdk';
+import WebSocket from 'ws';
 
 /**
  * 交付物里进出的都是未知形状的 JSON。这个别名只干一件事：让字段访问合法。
@@ -522,6 +523,8 @@ export function createBridge(options: Loose) {
   function buildClient() {
     const bot = new SnowLumaWebSocketClient({
       url: opts.wsUrl || DEFAULT_WS_URL,
+      // Node 22's built-in WebSocket can error without close; ws lets the SDK settle failed connects.
+      webSocket: WebSocket,
       // 空串会让鉴权头变成 `Bearer `，某些网关直接 401 —— 必须 || undefined（切片第 1 节）
       accessToken: opts.accessToken || undefined,
       requestTimeoutMs: 30000,

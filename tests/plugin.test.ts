@@ -17,6 +17,7 @@ import { createArchiveStore } from '../src/store.ts';
 import { record } from './fixtures.ts';
 import TokenMeter from '@deepseek-ai/dsh-token-meter';
 import ToolFreeCompaction from '../src/compaction.ts';
+import { WebSocketServer } from 'ws';
 declare module '@deepseek-ai/dsh-llm' { interface MessageSourceMap { 'test-schedule': { kind: 'test-schedule' } } }
 
 const config = { worldId: 'fish', agentPreset: 'companion', timeZone: 'Asia/Seoul' };
@@ -537,6 +538,38 @@ test('a module the config does not provide cannot be switched on from the consol
   const result = await routeCall(routes, '/dsh-world', '/dsh-world/console/modules', { 'x-dsh-world': '1', 'content-type': 'application/json' }, JSON.stringify({ wechat: true }));
   assert.equal(result.status, 400);
   assert.deepEqual((await consoleGet(routes, '/dsh-world/console/snapshot')).modules, { wechat: { available: false, enabled: true, running: false }, qq: { available: false, enabled: true, running: false } });
+});
+
+test('the QQ off switch survives world restart and plugin reload; re-enabling opens one connection', async t => {
+  const { ctx, root, cleanup, errors } = await hostFixture(t, () => textResponse('reply'));
+  isolateHome(t, root);
+  const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  await new Promise<void>(resolve => server.once('listening', resolve));
+  cleanup.push(() => new Promise<void>(resolve => server.close(resolve)));
+  let connections = 0;
+  server.on('connection', () => { connections++; });
+  const port = (server.address() as AddressInfo).port;
+  const { routes } = provideLifeHost(ctx);
+  const options = { ...config, life: true, qqNative: { enabled: true, wsUrl: `ws://127.0.0.1:${port}` } };
+  let plugin = ctx.plugin(worldPlugin, options); cleanup.push(() => plugin.dispose()); await plugin.await();
+  await until(async () => routes.length === 2, 'console');
+  await consolePost(routes, '/dsh-world/console/start'); await firstWakeDone(ctx, root);
+  await until(async () => connections === 1, 'QQ connected');
+  await consolePost(routes, '/dsh-world/console/modules', { qq: false });
+  assert.equal(JSON.parse(await readFile(join(root, 'worlds/fish/world.json'), 'utf8')).qqEnabled, false);
+  await consolePost(routes, '/dsh-world/console/stop');
+  await consolePost(routes, '/dsh-world/console/start');
+  const off = { available: true, enabled: false, running: false };
+  assert.deepEqual((await consoleGet(routes, '/dsh-world/console/snapshot')).modules.qq, off);
+  await plugin.dispose();
+  plugin = ctx.plugin(worldPlugin, options); await plugin.await();
+  await until(async () => routes.length === 2, 'reloaded console');
+  assert.deepEqual((await consoleGet(routes, '/dsh-world/console/snapshot')).modules.qq, off);
+  assert.equal(connections, 1, 'neither restart may silently reconnect a disabled channel');
+  await consolePost(routes, '/dsh-world/console/modules', { qq: true });
+  await until(async () => connections === 2, 'QQ re-enabled');
+  assert.deepEqual((await consoleGet(routes, '/dsh-world/console/snapshot')).modules.qq, { available: true, enabled: true, running: true });
+  assert.equal(errors.length, 0);
 });
 
 test('the config takes outlets by name with the kinds they want; the bridge is off and the toast on unless set', () => {

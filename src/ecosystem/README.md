@@ -4,12 +4,14 @@
 
 新增模块的目录约定、公共协议、内核变更说明和提交要求见 [贡献协议](../../CONTRIBUTING.md)。
 
-- `wechat/`：微信宿主接口、回复编排、图片接收和发送回执；`windows/` 放 Python 收发适配器及 `engine/` 原生桥。启动步骤见 [微信模块](wechat/windows/README.md)。
+- `wechat/`：微信宿主接口、群消息主动分页读取、回复编排、图片接收和发送回执；读写使用同一账号绑定与适配器轮询。`windows/messages.py` 共用身份与显示格式，`reading.py` 负责只读历史分页，`windows/` 同时放 Python 收发适配器及 `engine/` 原生桥。启动步骤见 [微信模块](wechat/windows/README.md)。
 - `qq/`：QQ 的两扇门——插件自己那条通道的接口（`/dsh-world/qq/native` 看状态、拨开关）与 SnowLuma 控制台入口。收发不在这里。（2026-10-27 之前这里管的是一个外部 `qq-bridge` 进程，那个进程已拆掉，配置项一并消失。）
 - `qq-native/`：QQ 的原生通道——直连 OneBot 的 WebSocket（收发、去重、白名单、群里被叫到才接、主动开口引擎），以及「阳台」那条给本机别的程序用的线（`native-bridge.ts`，对面跑的是 `src/qq-line.ts`）。
 - `shared/`：通用来源身份、群上下文、平台会话路由和消息出口。
 - `bridge/`：桌宠及其他本地程序向家的通用桥。
 
 各平台自身逻辑放在各自目录；后续 B 站接入时新增 `bilibili/`。平台适配器使用共同的身份和会话协议，通过现有归档服务保存正文，不各建一份记忆。
+
+QQ 按持久化开关动态加载，关闭状态在世界停启和插件重载后保留；QQ 初始化失败显示在健康状态中，不拖停内核、生活线和微信。Node 22 所需的 SDK 导入修补随安装执行，受限安装流程见 [安装说明](../../INSTALL.md)。
 
 微信本机配置、账号状态、依赖环境和原生构建产物继续保存在项目根目录的 `.host/wechat/`，不会打入发布包。运行入口为 `src/ecosystem/wechat/windows/wechat.ps1`。

@@ -10,14 +10,14 @@ export type MessageKey = typeof MESSAGE_KEYS[number];
 /** Marks her own alarm messages (in her own voice); the compaction instruction relies on it, so a template cannot drop it. Before 0.5 it read 【你的时间】. */
 export const ALARM_MARK = '【我的时间】';
 
-/** `## name` sections; anything before the first heading (the explanatory comment) is ignored. */
-export function parseSections(text: string): Map<string, string> {
+/** `## name` sections; with `names`, other Markdown headings stay in the current body. */
+export function parseSections(text: string, names?: readonly string[]): Map<string, string> {
   const sections = new Map<string, string>();
   let key: string | undefined; let lines: string[] = [];
   const close = () => { if (key !== undefined) sections.set(key, lines.join('\n').trim()); };
   for (const line of text.replace(/\r\n?/g, '\n').split('\n')) {
     const heading = /^## (.+?)\s*$/.exec(line);
-    if (heading) { close(); key = heading[1]!; lines = []; } else if (key !== undefined) lines.push(line);
+    if (heading && (!names || names.includes(heading[1]!))) { close(); key = heading[1]!; lines = []; } else if (key !== undefined) lines.push(line);
   }
   close();
   return sections;

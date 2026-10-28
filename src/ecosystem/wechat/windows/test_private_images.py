@@ -133,7 +133,7 @@ class PrivateImageTest(unittest.TestCase):
                 return dict(text='ok')
             def poll(_config):
                 if store.cursor('owner') == 12: raise StopIteration('done')
-                return None
+                return {}
             try:
                 with self.assertRaises(StopIteration): adapter.watch(config, database, store, lambda *_: None, ask=ask, report=lambda *_: None, poll=poll)
                 self.assertEqual(len(requests), 2)
@@ -162,7 +162,7 @@ class PrivateImageTest(unittest.TestCase):
                 return dict(text='ok')
             def poll(_config):
                 if store.cursor('owner') == 13: raise StopIteration('done')
-                return None
+                return {}
             try:
                 with self.assertRaises(StopIteration): adapter.watch(config, database, store, lambda *_: None, ask=ask, report=lambda *_: None, poll=poll)
                 self.assertEqual(len(requests), 1)

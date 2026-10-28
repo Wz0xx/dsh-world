@@ -110,6 +110,7 @@ def connect(config, stateDir):
     images = IncomingImages(database, config, checkProcess)
     database.readImage = images.read
     database.readSticker = images.readSticker
+    database.readReference = images.readReference
 
     sender = None
     def getSender():
@@ -157,12 +158,17 @@ def connect(config, stateDir):
                 raw = database.get_message_row(chat['id'], row['local_id'], shard=row['shard'])
                 if raw is None or not serverConfirmed(raw):
                     continue
-                if (kind == 1 and str(row['content']) == value) or (kind != 1 and mediaDigestMatches(row, digest, raw)):
+                # WeChatDB strips text on read; normalize only the comparison, never the sent value.
+                if (kind == 1 and str(row['content']) == value.strip()) or (kind != 1 and mediaDigestMatches(row, digest, raw)):
                     return
             time.sleep(0.5)
         raise RuntimeError('原生操作已提交但目标聊天尚未确认，需人工核对；不自动重发')
 
-    send.probe = lambda: getSender().send(config['chats'][0]['id'], 0)
+    def probe():
+        nativeSender = getSender()
+        return dict(version=nativeSender.profile['version'], **nativeSender.send(config['chats'][0]['id'], 0))
+
+    send.probe = probe
     send.close = close
     send.processId = config['processId']
     return database, send

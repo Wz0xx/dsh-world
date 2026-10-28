@@ -154,11 +154,21 @@ test('her persona is written in layers, kept only where filled, and read as one 
   writePersona(file, { 名字: '', 她是谁: '', 性格: '', 愿景: '' });
   assert.equal(existsSync(file), false, 'an empty persona removes the file');
 });
+test('Markdown headings inside vision and supplement remain part of those persona fields', async t => {
+  const file = join(await tempDir(t), 'persona.md');
+  const vision = '长期愿景\n\n## 一起完成的事\n完整保留这段愿景';
+  const supplement = '补充开头\n\n## 其他约定\n完整保留这段补充';
+  writePersona(file, { 愿景: vision, 补充: supplement });
+  const persona = readPersona(file);
+  assert.equal(persona.愿景, vision); assert.equal(persona.补充, supplement);
+  assert.match(renderPersona(persona), /## 一起完成的事\n完整保留这段愿景/);
+  assert.match(renderPersona(persona), /## 其他约定\n完整保留这段补充/);
+});
 test('her persona takes the place of the host persona at the top; where her preset has its own, hers follows it and the console says so', async t => {
   const requests: GenerateOptions[] = [];
   const { ctx, root, cleanup } = await hostFixture(t, async function* (request) { requests.push(request); yield* textResponse('reply'); });
   const personaFile = join(root, 'persona.md');
-  writePersona(personaFile, { 名字: '小鱼', 性格: '嘴硬心软' });
+  writePersona(personaFile, { 名字: '小鱼', 性格: '嘴硬心软', 愿景: 'VISION_IN_SYSTEM', 补充: 'SUPPLEMENT_IN_SYSTEM' });
   const store = createArchiveStore({ ...config, root });
   const world = createWorldRuntime(ctx, config, store, { prompt: { file: join(root, 'none.md'), persona: personaFile, names, life }, isHome: () => false });
   await world.start(); cleanup.push(() => world.stop().finally(() => store.close()));
@@ -166,6 +176,10 @@ test('her persona takes the place of the host persona at the top; where her pres
   own.agent.followup(user('hi')); await own.agent.whenIdle();
   const system = systemOf(requests[0]!);
   assert.ok(system.indexOf('我是小鱼。') >= 0 && system.indexOf('我是小鱼。') < system.indexOf('# 我的世界'), system);
+  assert.match(system, /# 愿景\nVISION_IN_SYSTEM\n\nSUPPLEMENT_IN_SYSTEM/);
+  assert.ok(system.indexOf('SUPPLEMENT_IN_SYSTEM') < system.indexOf('# 我的世界'));
+  const otherMessages = textOf(requests[0]!.messages.filter(message => message.role !== 'system'));
+  assert.ok(!otherMessages.includes('VISION_IN_SYSTEM') && !otherMessages.includes('SUPPLEMENT_IN_SYSTEM'), 'persona layers belong to the system prompt, not user context');
   assert.deepEqual(world.faults(), []);
 
   // A preset that registers its own persona for her agent first.

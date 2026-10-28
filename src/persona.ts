@@ -10,7 +10,7 @@ export type Persona = Record<PersonaLayer, string>;
 /** Missing or unreadable means not written yet: every layer empty. */
 export function readPersona(file: string): Persona {
   let sections = new Map<string, string>();
-  try { if (existsSync(file)) sections = parseSections(readFileSync(file, 'utf8')); } catch { /* treated as not written */ }
+  try { if (existsSync(file)) sections = parseSections(readFileSync(file, 'utf8'), PERSONA_LAYERS); } catch { /* treated as not written */ }
   return Object.fromEntries(PERSONA_LAYERS.map(layer => [layer, sections.get(layer) ?? ''])) as Persona;
 }
 /** Only layers with text are kept; a persona with none removes the file. */

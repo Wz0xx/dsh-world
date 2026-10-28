@@ -35,13 +35,30 @@ def encodeRequest(profile, pid, account, target, kind, value):
     return request
 
 
+def fileDigest(path):
+    with Path(path).open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
 def verifyFile(path, size, digest):
-    path = Path(path)
-    if path.stat().st_size != size:
+    if Path(path).stat().st_size != size:
         raise ValueError('微信构建大小不匹配，禁止加载原生桥')
-    with path.open('rb') as stream:
-        if hashlib.file_digest(stream, 'sha256').hexdigest() != digest:
-            raise ValueError('文件指纹不匹配，禁止加载原生桥')
+    if fileDigest(path) != digest:
+        raise ValueError('文件指纹不匹配，禁止加载原生桥')
+
+
+def selectProfile(path, profiles):
+    size = Path(path).stat().st_size
+    candidates = [profile for profile in profiles if profile['size'] == size]
+    if candidates:
+        digest = fileDigest(path)
+        matches = [profile for profile in candidates if profile['sha256'] == digest]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise ValueError('微信构建匹配多个适配配置，禁止加载原生桥')
+    versions = ' / '.join(profile['version'] for profile in profiles)
+    raise ValueError(f'不支持当前微信构建，已适配版本：{versions}；文件大小与 SHA256 必须同时匹配，禁止加载原生桥')
 
 
 class NativeSender:
@@ -51,12 +68,12 @@ class NativeSender:
         self.config, self.checkProcess = config, checkProcess
         self.checkProcess()
         self.process = psutil.Process(config['processId'])
-        self.profile = json.loads((Path(__file__).parent / 'engine/profile.json').read_text(encoding='utf-8-sig'))
         coreFiles = {m.path for m in self.process.memory_maps() if Path(m.path).name.lower() == 'weixin.dll'}
         if len(coreFiles) != 1:
             raise RuntimeError('不能唯一核对微信核心 DLL')
         core = Path(next(iter(coreFiles)))
-        verifyFile(core, self.profile['size'], self.profile['sha256'])
+        profiles = json.loads((Path(__file__).parent / 'engine/profiles.json').read_text(encoding='utf-8-sig'))
+        self.profile = selectProfile(core, profiles)
         # The build sits beside the adapter's config.json, which is where the adapter runs from or is managed by the plugin.
         engineDir = Path(config['engineDir']) if config.get('engineDir') else Path(__file__).resolve().parents[4] / '.host/wechat/engine'
         buildFile = engineDir / 'current.json'
@@ -86,25 +103,29 @@ class NativeSender:
         self.handle = self.api.OpenProcess(0x43a, False, config['processId'])
         if not self.handle:
             raise c.WinError(c.get_last_error())
-        self.remoteBase = self._modules().get(str(self.dll).casefold())
-        if self.remoteBase is None:
-            address = c.cast(self.api.LoadLibraryW, c.c_void_p).value
-            owner = w.HMODULE()
-            if not self.api.GetModuleHandleExW(6, address, c.byref(owner)):
-                raise c.WinError(c.get_last_error())
-            ownerPath = c.create_unicode_buffer(32768)
-            if not self.api.GetModuleFileNameW(owner, ownerPath, len(ownerPath)):
-                raise c.WinError(c.get_last_error())
-            module = next((base for path, base in self._modules().items() if Path(path).name.casefold() == Path(ownerPath.value).name.casefold()), None)
-            if module is None:
-                raise RuntimeError('找不到目标进程的系统加载器')
-            encodedPath = c.create_unicode_buffer(str(self.dll))
-            self._invoke(module + address - owner.value, encodedPath, 30000)
+        try:
             self.remoteBase = self._modules().get(str(self.dll).casefold())
             if self.remoteBase is None:
-                raise RuntimeError('原生桥未成功加载')
-        self.local = c.WinDLL(str(self.dll))
-        self.entry = self.remoteBase + c.cast(self.local.DshWechatSend, c.c_void_p).value - self.local._handle
+                address = c.cast(self.api.LoadLibraryW, c.c_void_p).value
+                owner = w.HMODULE()
+                if not self.api.GetModuleHandleExW(6, address, c.byref(owner)):
+                    raise c.WinError(c.get_last_error())
+                ownerPath = c.create_unicode_buffer(32768)
+                if not self.api.GetModuleFileNameW(owner, ownerPath, len(ownerPath)):
+                    raise c.WinError(c.get_last_error())
+                module = next((base for path, base in self._modules().items() if Path(path).name.casefold() == Path(ownerPath.value).name.casefold()), None)
+                if module is None:
+                    raise RuntimeError('找不到目标进程的系统加载器')
+                encodedPath = c.create_unicode_buffer(str(self.dll))
+                self._invoke(module + address - owner.value, encodedPath, 30000)
+                self.remoteBase = self._modules().get(str(self.dll).casefold())
+                if self.remoteBase is None:
+                    raise RuntimeError('原生桥未成功加载')
+            self.local = c.WinDLL(str(self.dll))
+            self.entry = self.remoteBase + c.cast(self.local.DshWechatSend, c.c_void_p).value - self.local._handle
+        except Exception:
+            self.close()
+            raise
 
     def _modules(self):
         modules = {}

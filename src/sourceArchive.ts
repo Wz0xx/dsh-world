@@ -5,13 +5,10 @@ import { extractConversationRecords } from './archive.ts';
 import type { ArchiveStore } from './store.ts';
 import type { WorldConfig } from './types.ts';
 import { wechatDeliveryPatch } from './ecosystem/wechat/archive.ts';
+import { errorText, Faults } from './faults.ts';
 
 const pageSize = 128;
-/**
- * A session log the host itself cannot read (a compaction cut off mid-write, a half-flushed turn). It is not
- * our bug and it never fixes itself, so retrying adds nothing — one broken conversation must not cost her the
- * whole world: flushed and thrown, it fails the plugin's load and every session loses its memory block.
- */
+/** Unreadable logs are isolated per source; their archive gaps remain visible until replay succeeds. */
 export function isCorruptSessionLog(error: unknown): boolean {
   const text = error instanceof Error ? `${error.name} ${error.message}` : String(error ?? '');
   return /stored log is corrupt|SessionFormatError|does not match an open turn/i.test(text);
@@ -32,16 +29,22 @@ export function createSourceArchive(ctx: Context, config: WorldConfig, store: Ar
   const dirty = new Set<string>();
   const jobs = new Map<string, Promise<void>>();
   const failures = new Map<string, unknown>();
+  const faults = new Faults();
   let tail = Promise.resolve();
 
+  function forget(sessionId: string): void {
+    store.forgetProgress(sessionId);
+    failures.delete(sessionId); faults.clear(sessionId);
+  }
+
   /** Copies what the archive has not seen yet; `skip` moves past it without keeping it. */
-  async function replay(sessionId: string, skip = false): Promise<void> {
+  async function copySource(sessionId: string, skip: boolean): Promise<void> {
     const id = SessionId(sessionId);
     const live = ctx.sessions.get(id);
     if (live) await ctx.sessions.flush(live);
     // A deleted session keeps what it already archived; there is nothing left to replay.
     const handle = await ctx.sessionPersistence.open(id, 'read').catch(error => {
-      if (isNotFound(error)) { ctx.logger.warn(`dsh-world: session ${sessionId} is no longer stored; skipping replay`); store.forgetProgress(sessionId); return undefined; }
+      if (isNotFound(error)) { ctx.logger.warn(`dsh-world: session ${sessionId} is no longer stored; skipping replay`); forget(sessionId); return undefined; }
       throw error;
     });
     if (!handle) return;
@@ -62,6 +65,21 @@ export function createSourceArchive(ctx: Context, config: WorldConfig, store: Ar
       }
     } finally { await handle.close(); }
   }
+  async function replay(sessionId: string, skip = false): Promise<void> {
+    try {
+      await copySource(sessionId, skip);
+      failures.delete(sessionId); faults.clear(sessionId);
+    } catch (error) {
+      dirty.delete(sessionId);
+      const message = `会话 ${sessionId} 归档未完成：${errorText(error)}`;
+      faults.set(sessionId, message);
+      if (isCorruptSessionLog(error)) {
+        failures.delete(sessionId); ctx.logger.warn(`dsh-world: ${message}`); return;
+      }
+      failures.set(sessionId, error);
+      throw error;
+    }
+  }
   /** Runs after every queued replay. */
   function enqueue(work: () => Promise<void>): Promise<void> {
     const job = tail.then(work);
@@ -75,19 +93,16 @@ export function createSourceArchive(ctx: Context, config: WorldConfig, store: Ar
     const pending = jobs.get(sessionId);
     if (pending) return pending;
     const job = tail.then(async () => {
-      while (dirty.delete(sessionId)) await replay(sessionId);
-      failures.delete(sessionId);
+      try { while (dirty.delete(sessionId)) await replay(sessionId); }
+      finally { jobs.delete(sessionId); }
     });
     jobs.set(sessionId, job);
-    tail = job.catch(error => {
-      // Skips and a warning instead of a stored failure — see `isCorruptSessionLog`.
-      if (isCorruptSessionLog(error)) { dirty.delete(sessionId); ctx.logger.warn(`dsh-world: 会话 ${sessionId} 的日志读不动，先跳过（这段对话不归档）`); return; }
-      failures.set(sessionId, error); ctx.logger.error(error);
-    }).finally(() => { jobs.delete(sessionId); });
+    tail = job.catch(error => { ctx.logger.error(error); });
     return job;
   }
   return {
     schedule,
+    faults: () => faults.list(),
     /**
      * Every session the archive has seen, replayed again so nothing written while the plugin was not loaded is
      * missed; with `skip`, what was said while her world was stopped is passed over instead.
@@ -111,7 +126,7 @@ export function createSourceArchive(ctx: Context, config: WorldConfig, store: Ar
           after = id;
           if (visited.has(id)) continue;
           // A session deleted from the host (not merely archived there) keeps its records but has nothing left to resume.
-          if (!await ctx.sessionPersistence.stat(SessionId(id))) { store.forgetProgress(id); continue; }
+          if (!await ctx.sessionPersistence.stat(SessionId(id))) { forget(id); continue; }
           if (!archived(id)) continue;
           await replayOne(id);
         }

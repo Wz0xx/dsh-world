@@ -21,7 +21,7 @@ class SendingTest(unittest.TestCase):
             def send(_chat,item):sent.append(item['text']);delivered.set()
             def poll(_):
                 if store.cursor('private')==11:raise StopIteration('本轮验证完成')
-                return jobs.pop(0) if jobs else None
+                return dict(job=jobs.pop(0) if jobs else None)
             try:
                 with self.assertRaises(StopIteration):
                     watch(config,Database(),store,send,ask=ask,report=lambda *_:None,poll=poll)
@@ -37,10 +37,10 @@ class SendingTest(unittest.TestCase):
             def offline(*_):raise RuntimeError('回执网络失败')
             try:
                 with self.assertRaisesRegex(RuntimeError,'回执网络失败'):
-                    flushOutgoing(config,None,store,lambda _chat,item:sent.append(item),poll=lambda _:job,report=offline)
+                    flushOutgoing(config,None,store,lambda _chat,item:sent.append(item),poll=lambda _:dict(job=job),report=offline)
                 store.checkPending()
                 jobs=[job,None];receipts=[]
-                flushOutgoing(config,None,store,lambda *_:sent.append('重复'),poll=lambda _:jobs.pop(0),report=lambda _file,r:receipts.append(r))
+                flushOutgoing(config,None,store,lambda *_:sent.append('重复'),poll=lambda _:dict(job=jobs.pop(0)),report=lambda _file,r:receipts.append(r))
                 self.assertEqual(len(sent),1)
                 self.assertEqual(receipts[-1],dict(id='a'*64,confirmed=1,status='sent'))
             finally:store.close()
@@ -53,7 +53,7 @@ class SendingTest(unittest.TestCase):
             jobs = [dict(id='a'*64, accountId='wxid_bot', chatId='private', messages=[dict(type='text',text='主动一句'),dict(type='text',text='再一句')]),
                     dict(id='b'*64, accountId='wxid_bot', chatId='family@chatroom', messages=[dict(type='text',text='群里一句')])]
             sent, receipts = [], []
-            def poll(_config): return jobs.pop(0) if jobs else None
+            def poll(_config): return dict(job=jobs.pop(0) if jobs else None)
             try:
                 flushOutgoing(config, None, store, lambda chat,item: sent.append((chat['id'],item['text'])), poll=poll, report=lambda _file,receipt: receipts.append(receipt))
                 self.assertEqual(sent,[('private','主动一句'),('private','再一句'),('family@chatroom','群里一句')])
@@ -72,11 +72,11 @@ class SendingTest(unittest.TestCase):
                 if len(sent)==2:raise RuntimeError('断开，结果不明')
             try:
                 with self.assertRaisesRegex(RuntimeError,'第 2/2 条'):
-                    flushOutgoing(config,None,store,send,poll=lambda _config:job,report=lambda _file,r:receipts.append(r))
+                    flushOutgoing(config,None,store,send,poll=lambda _config:dict(job=job),report=lambda _file,r:receipts.append(r))
                 self.assertEqual(receipts[-1],dict(id='a'*64,confirmed=1,status='uncertain'))
                 store.close();store=MessageStore(root/'state.sqlite')
                 with self.assertRaisesRegex(RuntimeError,'尚未确认'):
-                    flushOutgoing(config,None,store,send,poll=lambda _config:job,report=lambda *_:None)
+                    flushOutgoing(config,None,store,send,poll=lambda _config:dict(job=job),report=lambda *_:None)
                 self.assertEqual(sent,['一','二'])
             finally:store.close()
 
@@ -88,7 +88,7 @@ class SendingTest(unittest.TestCase):
             job=dict(id='a'*64,accountId='wxid_bot',chatId='private',messages=[dict(type='text',text='已经发过')])
             jobs=[job,None]; sent,receipts=[],[]
             try:
-                flushOutgoing(config,None,store,lambda *_:sent.append(True),poll=lambda _config:jobs.pop(0),report=lambda _file,r:receipts.append(r))
+                flushOutgoing(config,None,store,lambda *_:sent.append(True),poll=lambda _config:dict(job=jobs.pop(0)),report=lambda _file,r:receipts.append(r))
                 self.assertEqual(sent,[])
                 self.assertEqual(receipts[-1]['status'],'sent')
             finally:store.close()
@@ -100,9 +100,9 @@ class SendingTest(unittest.TestCase):
             job=dict(id='a'*64,accountId='wxid_other',chatId='private',messages=[dict(type='text',text='不要发送')])
             sent=[]
             try:
-                with self.assertRaises(ValueError):flushOutgoing(config,None,store,lambda *_:sent.append(True),poll=lambda _config:job)
+                with self.assertRaises(ValueError):flushOutgoing(config,None,store,lambda *_:sent.append(True),poll=lambda _config:dict(job=job))
                 job={**job,'accountId':'wxid_bot','chatId':'unselected'}
-                with self.assertRaises(ValueError):flushOutgoing(config,None,store,lambda *_:sent.append(True),poll=lambda _config:job)
+                with self.assertRaises(ValueError):flushOutgoing(config,None,store,lambda *_:sent.append(True),poll=lambda _config:dict(job=job))
                 self.assertEqual(sent,[])
             finally:store.close()
 

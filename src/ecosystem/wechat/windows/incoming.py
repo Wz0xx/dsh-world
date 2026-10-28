@@ -9,6 +9,7 @@ from pathlib import Path
 from wechatauto.media import MediaDownloader, V2_MAGIC, aligned_aes_block_size
 from snapshot import fileStamp, SnapshotBusy
 from stickers import StickerUnavailable, fetchSticker
+from quotes import referenceError
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_PIXELS = 32_000_000
@@ -27,6 +28,7 @@ def saveImage(source, root, selfId, chatId, quality):
             if image.format not in ('PNG', 'JPEG', 'WEBP', 'GIF') or image.width * image.height > MAX_IMAGE_PIXELS:
                 raise ImageUnavailable('图片格式或像素数量暂不支持')
             output = io.BytesIO()
+            firstFrame = bool(getattr(image, 'is_animated', False))
             ImageOps.exif_transpose(image).convert('RGBA').save(output, format='PNG')
             data = output.getvalue()
     except (UnidentifiedImageError, Image.DecompressionBombError) as error:
@@ -47,7 +49,36 @@ def saveImage(source, root, selfId, chatId, quality):
         os.replace(temporary, directory / name)
     finally:
         if temporary and temporary.exists(): temporary.unlink()
-    return dict(file=name, quality=quality)
+    return dict(file=name, quality=quality, **({'firstFrame': True} if firstFrame else {}))
+
+
+def admitReference(database, chatId, message):
+    reference = message.get('reference') if message else None
+    if reference and reference['type'] in ('image', 'sticker') and not reference.get('error'):
+        try:
+            reference['image'] = database.readReference(chatId, reference)
+            reference['text'] = '【引用图片】' if reference['type'] == 'image' else '【引用表情包】'
+        except ImageUnavailable as error: referenceError(reference, error)
+    return message
+
+
+def referenceRow(database, chatId, messageId):
+    """Search only the selected conversation, bounding every shard to two matches."""
+    number = int(messageId)
+    if number >= 1 << 63: number -= 1 << 64
+    def query(tables):
+        found = []
+        for connection, table in tables:
+            quotedTable = table.replace('"', '""')
+            for (localId,) in connection.execute(f'SELECT local_id FROM "{quotedTable}" WHERE server_id=? ORDER BY local_id LIMIT 2 OFFSET 0', (number,)):
+                found.append((localId, database._shard_label(connection)))
+        return found
+    found = database._run_msg_query(chatId, query) or []
+    if len(found) != 1: raise ImageUnavailable('原消息不在本机' if not found else '原消息标识不唯一')
+    localId, shard = found[0]
+    raw = database.get_message_row(chatId, localId, shard=shard)
+    if not raw or raw.get('server_id') != number: raise ImageUnavailable('原消息位置已变化')
+    return raw
 
 
 class ScopedMedia(MediaDownloader):
@@ -94,6 +125,20 @@ class IncomingImages:
     def __init__(self, database, config, checkProcess):
         self.database, self.config, self.checkProcess = database, config, checkProcess
         self.media = None
+
+    def readReference(self, chatId, reference):
+        if not any(chat['id'] == chatId for chat in self.config['chats']):
+            raise ValueError('引用必须来自已配置的聊天')
+        if not reference.get('id') or not reference.get('speakerId'):
+            raise ImageUnavailable('引用缺少原消息 ID 或原作者')
+        self.checkProcess()
+        raw = referenceRow(self.database, chatId, reference['id'])
+        if not raw or 'wechat:' + (raw.get('sender_username') or '') != reference['speakerId']:
+            raise ImageUnavailable('引用原作者与本机消息不符')
+        kind = raw['local_type'] & 0xffffffff
+        if kind not in ({3} if reference['type'] == 'image' else {47, 11000}):
+            raise ImageUnavailable('引用类型与本机原消息不符')
+        return (self.read if reference['type'] == 'image' else self.readSticker)(chatId, raw)
 
     def read(self, chatId, row):
         if not any(chat['id'] == chatId for chat in self.config['chats']):

@@ -5,13 +5,12 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { conversationRecordId } from '../../archive.ts';
 import { speakerIdentity } from '../shared/identity.ts';
-import { replyMessages, replyText, wechatSendTool } from './messages.ts';
+import { replyMessages, replyText, wechatSendTool, wechatTextOutput } from './messages.ts';
 import type { PreparedReply, WechatReceipt } from './archive.ts';
 
 interface Target { id: string; name: string }
 interface Job { id: string; accountId: string; chatId: string; messages: ReturnType<typeof replyMessages> }
 interface Row { id: string; sessionId: string; messageId: string; status: string; body: string; confirmed: number; error: string | null }
-const output = { schema: { type: 'string' as const }, render: (_args: unknown, value: string) => [{ type: 'text' as const, text: value }] };
 
 /** The existing adapter owns all sending; a claim survives disconnects until its receipt is recorded. */
 export function createWechatSending(deps: { ctx: Context; file: string; worldId: string; record?(reply: PreparedReply): Promise<string>; receipt?(receipt: WechatReceipt): Promise<void> }) {
@@ -92,31 +91,34 @@ export function createWechatSending(deps: { ctx: Context; file: string; worldId:
       }
     }
   }
+  function target(chatId: string) {
+    if (stopped || !accountId) throw new Error('微信适配器尚未连接');
+    const chat = chats.find(chat => chat.id === chatId);
+    if (!chat) throw new Error('只能使用 wechat_chats 列出的已配置聊天');
+    return speakerIdentity({ channel: 'wechat', accountId, speakerId: `wechat:${accountId}`, conversationId: chat.id, conversationName: chat.name, conversationType: chat.id.endsWith('@chatroom') ? 'group' : 'private' });
+  }
   const tools = [defineTool({
-    name: 'wechat_chats', description: '分页查看已绑定微信账号允许发送的私聊和群，返回准确 chatId；不能向列表外发送。',
-    parameters: { limit: { type: 'integer' }, offset: { type: 'integer' } }, output,
+    name: 'wechat_chats', description: '分页查看已绑定微信账号允许发送的私聊和群，返回准确 chatId。群聊可先用 wechat_history 读消息，再用 wechat_send 发言；不能访问列表外聊天。',
+    parameters: { limit: { type: 'integer' }, offset: { type: 'integer' } }, output: wechatTextOutput,
     execute: async ({ limit = 20, offset = 0 }) => {
       if (stopped || !accountId) throw new Error('微信适配器尚未连接');
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(offset) || offset < 0) throw new Error('分页参数无效');
       return JSON.stringify({ accountId, chats: chats.slice(offset, offset + limit).map(chat => ({ chatId: chat.id, name: chat.name, type: chat.id.endsWith('@chatroom') ? 'group' : 'private' })), hasMore: offset + limit < chats.length });
     },
   }), wechatSendTool(async (chatId, messages, context) => {
-    if (stopped || !accountId) throw new Error('微信适配器尚未连接，未安排发送');
-    const boundAccount = accountId;
-    const chat = chats.find(chat => chat.id === chatId);
-    if (!chat) throw new Error('只能向 wechat_chats 列出的已配置聊天发送');
+    const identity = target(chatId);
+    const boundAccount = identity.accountId;
     const agent = context.agent;
     if (!agent) throw new Error('微信发送需要来源会话');
     context.signal.throwIfAborted();
-    const identity = speakerIdentity({ channel: 'wechat', accountId, speakerId: `wechat:${accountId}`, conversationId: chat.id, conversationName: chat.name, conversationType: chat.id.endsWith('@chatroom') ? 'group' : 'private' });
-    const message = createUserMessage({ source: { kind: 'dsh-world-wechat-outgoing', form: 'recall', identity, messages }, content: [{ type: 'text', text: `微信待发送给 ${chat.name}（${chat.id}），以下是我已安排的正文，尚未确认发送，不要重复发送：\n${replyText(messages)}` }] });
+    const message = createUserMessage({ source: { kind: 'dsh-world-wechat-outgoing', form: 'recall', identity, messages }, content: [{ type: 'text', text: `微信待发送给 ${identity.conversationName}（${chatId}），以下是我已安排的正文，尚未确认发送，不要重复发送：\n${replyText(messages)}` }] });
     const id = conversationRecordId(deps.worldId, agent.id, message.id);
     transaction(() => db.prepare("INSERT INTO jobs(id,sessionId,messageId,status,body) VALUES (?,?,?,'staged',?)").run(id, agent.id, message.id, JSON.stringify({ id, accountId: boundAccount, chatId, messages } satisfies Job)));
     context.deferContext(message);
     return JSON.stringify({ id, status: 'queued', total: messages.length, note: '会话记录写入后由适配器发送；尚未确认送达，勿重复调用。' });
   }), defineTool({
     name: 'wechat_delivery', description: '按 wechat_send 返回的 ID 查询排队或发送结果。sent 只代表微信服务器已确认发送，不代表对方已读；uncertain 不得自动重发。',
-    parameters: { id: { type: 'string', required: true } }, output,
+    parameters: { id: { type: 'string', required: true } }, output: wechatTextOutput,
     execute: async ({ id }) => {
       if (stopped) throw new Error('微信模块已停止');
       if (!/^[a-f0-9]{64}$/.test(id)) throw new Error('无效的发送 ID');
@@ -128,6 +130,7 @@ export function createWechatSending(deps: { ctx: Context; file: string; worldId:
   })];
   return {
     tools,
+    target,
     /** Bound account, chats the adapter reported, and jobs waiting to go out or needing a human check. */
     status() {
       const count = (...states: string[]) => (db.prepare(`SELECT COUNT(*) AS n FROM jobs WHERE status IN (${states.map(() => '?').join(',')})`).get(...states) as { n: number }).n;

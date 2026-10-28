@@ -101,7 +101,7 @@ for (const caption of ['', '这张图里有什么']) test(`private images reach 
   }
 });
 
-test('protocol 3 accepts an image-only private request and rejects another conversation or sender', async t => {
+test('the current protocol accepts an image-only private request and rejects another conversation or sender', async t => {
   const requests: GenerateOptions[] = [];
   const { ctx, root, cleanup } = await hostFixture(t, request => { requests.push(request); return textResponse('看到了'); });
   const privateIdentity = { ...identity, conversationType: 'private' as const, conversationId: 'owner' };
@@ -117,7 +117,7 @@ test('protocol 3 accepts an image-only private request and rejects another conve
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   cleanup.push(() => new Promise<void>(resolve => server.close(() => resolve())));
   const address = server.address(); assert.ok(address && typeof address === 'object');
-  const { token, path, protocol } = JSON.parse(await readFile(file, 'utf8')); assert.equal(protocol, 3);
+  const { token, path, protocol } = JSON.parse(await readFile(file, 'utf8')); assert.equal(protocol, 4);
   const post = (media: unknown, text = '') => fetch(`http://127.0.0.1:${address.port}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-dsh-world-token': token }, body: JSON.stringify({ identity: privateIdentity, text, media }) });
   assert.equal((await post([])).status, 400);
   assert.equal((await post([{ ...previous, identity }])).status, 400);

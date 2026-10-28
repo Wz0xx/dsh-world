@@ -66,6 +66,26 @@
 - 代码修改按影响运行 `npm run typecheck`、`npm test`、`npm run build`，补充相关适配器测试。新增非平凡逻辑至少有一个有意义的回归测试；仅文档修改检查格式与链接即可。
 - 真实账号测试与单元测试分开说明：使用什么环境、实际确认了什么、哪些条件尚未验证。涉及第三方协议或客户端内部调用时，在模块文档中说明版本限制、账号及数据风险，不能宣称保证不触发风控。
 
+## CI 与安装包验证
+
+[CI](.github/workflows/ci.yml) 在 PR、`main` 推送和手动触发时运行 Windows / Linux 两条任务，使用最低支持的 Node 22.16.0。两端执行干净安装、类型检查、全部 Node 回归测试、编译和安装包验证；Windows 另用 Python 3.11 安装固定的微信适配器依赖并跑离线测试。相同分支的新运行会取消旧运行，两端独立报告结果。
+
+本机可按以下 PowerShell 命令复现 Node 与安装包检查：
+
+```powershell
+npm ci
+npm run typecheck
+npm test
+npm run build
+New-Item -ItemType Directory -Force artifacts | Out-Null
+npm pack --ignore-scripts --pack-destination artifacts
+npm run test:package
+```
+
+这里的 `--ignore-scripts` 只用于打包，前面的类型检查和编译已经完成；依赖安装仍执行 SDK 修补。`test:package` 在本仓库 `.host/` 下创建临时消费项目，安装真实 `.tgz` 及其生产依赖，复用父目录提供的 DSH 宿主依赖，核对入口加载、SDK 修补和编译后 QQ 驱动的本地 WebSocket 连接，结束后清理临时项目。检查不需要 DSH profile、微信进程或真实账号。
+
+每个平台检查通过后，CI 上传 `artifacts/` 中的 `.tgz` 供下载。CI 不替代桌面端和真实账号验收。
+
 ## 提交说明
 
 可按以下结构提交 Issue 或 PR；未知内容写“未验证”，不要填成已完成：

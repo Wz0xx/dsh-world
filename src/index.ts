@@ -15,7 +15,7 @@ import { createLifeRuntime, type LifeRuntime } from './life/runtime.ts';
 import type { LifeOptions } from './life/types.ts';
 import { createOutlet } from './ecosystem/shared/outlets.ts';
 import { readPersona, writePersona } from './persona.ts';
-import { createQqNativeModule, type QqNativeModule } from './ecosystem/qq-native/index.ts';
+import type { QqNativeModule } from './ecosystem/qq-native/index.ts';
 import { qqRoute } from './ecosystem/qq/route.ts';
 import { createConsoleDoors, discoverSnowlumaHome } from './ecosystem/qq/panel.ts';
 import { startSnowluma } from './ecosystem/qq/snowluma-start.ts';
@@ -166,6 +166,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     let bridge: Bridge | undefined;
     let wechat: WechatModule | undefined;
     let qqNative: QqNativeModule | undefined;
+    let qqChannels: ReturnType<typeof createChannelSessions> | undefined;
     let adapter: AdapterSupervisor | undefined;
     let channels: ReturnType<typeof createChannelSessions> | undefined;
     let unregisterWechat: (() => void) | undefined;
@@ -192,49 +193,56 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     }
     /** QQ talks to her through the same home the WeChat channel uses; only the transport differs. */
     async function startQqNative(current: LifeRuntime): Promise<void> {
-      if (qqNative || !config.qqNative?.enabled) return;
-      const groupSessions = createChannelSessions({ ctx: lifeCtx, host, store, roomDir: options.roomDir, roomTitle: roomTitle(names()), agentPreset: config.agentPreset });
-      qqNative = createQqNativeModule({
-        ctx: lifeCtx,
-        // 一个 QQ 对话落在哪。群总是各建一个频道会话；私聊默认落进她的家，除非
-        // `bindHomeSession: none` 把它挡在外面 —— 开发测试这条通道时就靠它，
-        // 免得测试回合走进步话真正生活着的那条线。
-        home: identity => {
-          const bind = config.qqNative?.bindHomeSession ?? 'owner';
-          if (identity.conversationType === 'group') return bind === 'all' ? current.home() : groupSessions.open(identity);
-          return bind === 'none' ? groupSessions.open(identity) : current.home();
-        },
-        logger: lifeCtx.logger,
-        stateFile: join(options.roomDir, '..', 'qq-native.json'),
-        config: () => {
-                  const q = config.qqNative ?? {};
-                  return {
-                    enabled: q.enabled ?? false,
-                    wsUrl: q.wsUrl ?? 'ws://127.0.0.1:3003',
-                    accessToken: q.accessToken ?? '',
-                    allowPrivate: q.allowPrivate ?? [],
-                    ownerQQ: q.ownerQQ ?? '',
-                    snowlumaHome: q.snowlumaHome ?? '',
-                    supervise: q.supervise ?? true,
-                    allowGroups: q.allowGroups ?? [],
-                    autoReply: q.autoReply ?? true,
-                    contextMessages: q.contextMessages ?? 6,
-                    groupTrigger: q.groupTrigger ?? 'mention',
-                    groupKeywords: q.groupKeywords ?? [],
-                    mutedUntil: q.mutedUntil ?? '',
-                    bridge: {
-                      port: q.bridge?.port ?? 0,
-                      token: q.bridge?.token ?? '',
-                      title: q.bridge?.title ?? '阳台',
-                      contextMessages: q.bridge?.contextMessages ?? 6,
-                    },
-                    bindHomeSession: q.bindHomeSession ?? 'owner',
-                  };
-                },
-      });
-      qqNative.start();
+      const q = config.qqNative;
+      if (qqNative || !q?.enabled || !power.qqEnabled()) return;
+      try {
+        const { createQqNativeModule } = await import('./ecosystem/qq-native/index.ts');
+        if (qqNative || life !== current || !power.running() || !power.qqEnabled()) return;
+        const groupSessions = createChannelSessions({ ctx: lifeCtx, host, store, roomDir: options.roomDir, roomTitle: roomTitle(names()), agentPreset: config.agentPreset });
+        qqChannels = groupSessions;
+        qqNative = createQqNativeModule({
+          ctx: lifeCtx,
+          // 一个 QQ 对话落在哪。群总是各建一个频道会话；私聊默认落进她的家，除非
+          // `bindHomeSession: none` 把它挡在外面 —— 开发测试这条通道时就靠它，
+          // 免得测试回合走进步话真正生活着的那条线。
+          home: identity => {
+            const bind = q.bindHomeSession ?? 'owner';
+            if (identity.conversationType === 'group') return bind === 'all' ? current.home() : groupSessions.open(identity);
+            return bind === 'none' ? groupSessions.open(identity) : current.home();
+          },
+          logger: lifeCtx.logger,
+          stateFile: join(options.roomDir, '..', 'qq-native.json'),
+          config: () => ({
+            enabled: q.enabled ?? false,
+            wsUrl: q.wsUrl ?? 'ws://127.0.0.1:3003',
+            accessToken: q.accessToken ?? '',
+            allowPrivate: q.allowPrivate ?? [],
+            ownerQQ: q.ownerQQ ?? '',
+            snowlumaHome: q.snowlumaHome ?? '',
+            supervise: q.supervise ?? true,
+            allowGroups: q.allowGroups ?? [],
+            autoReply: q.autoReply ?? true,
+            contextMessages: q.contextMessages ?? 6,
+            groupTrigger: q.groupTrigger ?? 'mention',
+            groupKeywords: q.groupKeywords ?? [],
+            mutedUntil: q.mutedUntil ?? '',
+            bridge: {
+              port: q.bridge?.port ?? 0,
+              token: q.bridge?.token ?? '',
+              title: q.bridge?.title ?? '阳台',
+              contextMessages: q.bridge?.contextMessages ?? 6,
+            },
+            bindHomeSession: q.bindHomeSession ?? 'owner',
+          }),
+        });
+        qqNative.start();
+        faults.clear('qq');
+      } catch (error) {
+        stopQqNative();
+        faults.set('qq', `QQ 模块没能启动：${errorText(error)}`); lifeCtx.logger.error(error);
+      }
     }
-    function stopQqNative(): void { qqNative?.stop(); qqNative = undefined; }
+    function stopQqNative(): void { qqNative?.stop(); qqNative = undefined; qqChannels?.stop(); qqChannels = undefined; faults.clear('qq'); }
     async function startLife(resumed: boolean): Promise<void> {
       if (!lifeStore || life) return;
       try {
@@ -245,7 +253,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         life = current; isHome = current.isHome;
         if (config.bridge) { bridge = createBridge({ ctx: lifeCtx, home: () => current.home(), outlets, origin: () => host.origin(), file: join(worldDir, 'bridge.json'), name: names().companion }); bridge.start(); }
         if (config.wechat && power.wechatEnabled()) await startWechat(current);
-        if (config.qqNative?.enabled) await startQqNative(current);
+        if (config.qqNative?.enabled && power.qqEnabled()) await startQqNative(current);
         faults.clear('life');
         await current.start({ resumed });
       } catch (error) {
@@ -268,7 +276,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     if (config.bridge) lifeCtx.effect(() => webServer.register(bridgeRoute(() => bridge, config.allowedHosts)), 'dsh-world bridge route');
 
     // Her album lives in her room, so the console shows it whether or not the life line is running.
-    const sources = consoleSources({ ctx: lifeCtx, config: memoryConfig, archive: store, names, ...(lifeStore ? { lifeStore } : {}), life: () => life, diaryDir: options.diaryDir, running: power.running, dailyBudget: power.dailyBudget, memoryTurns: power.memoryTurns, selectedArchiveScope: power.selectedArchiveScope, wechat: () => wechat ? { ...wechat.status(), adapter: adapter?.status() ?? null } : undefined, includesSession, native: () => qqNative?.status() ?? null, 
+    const sources = consoleSources({ ctx: lifeCtx, config: memoryConfig, archive: store, names, ...(lifeStore ? { lifeStore } : {}), life: () => life, diaryDir: options.diaryDir, running: power.running, dailyBudget: power.dailyBudget, memoryTurns: power.memoryTurns, selectedArchiveScope: power.selectedArchiveScope, wechat: () => wechat ? { ...wechat.status(), adapter: adapter?.status() ?? null } : undefined, includesSession, native: () => qqNative?.status() ?? null,
       modules: () => ({ wechat: { available: config.wechat, enabled: power.wechatEnabled(), running: wechat !== undefined }, qq: { available: Boolean(config.qqNative?.enabled), enabled: power.qqEnabled(), running: qqNative !== undefined } }), faults: () => [...faults.list(), ...(memory?.faults() ?? []), ...(bridge?.faults() ?? [])] });
     const actions: ConsoleActions = {
       async start() {
@@ -298,6 +306,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           if (patch.wechat === true && life) await startWechat(life);
           if (patch.qq === false) stopQqNative();
           if (patch.qq === true && life) await startQqNative(life);
+          if (patch.qq === true && life && !qqNative) return 'QQ 模块没能启动，请查看健康状态';
         } catch (error) { faults.set('wechat', `微信模块没能切换：${errorText(error)}`); lifeCtx.logger.error(error); return `切换失败：${errorText(error)}`; }
         finally { sources.invalidate(); }
         faults.clear('wechat');
